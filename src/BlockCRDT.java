@@ -5,10 +5,13 @@ import java.util.Map;
 
 import javax.swing.plaf.basic.BasicInternalFrameTitlePane.MaximizeAction;
 
-private static final int MAX_LINES = 10;
-private static final int MIN_LINES = 2;
+
 
 public class BlockCRDT {
+    
+    private static final int MAX_LINES = 10;
+    private static final int MIN_LINES = 2;
+
     BlockNode root;
     private int userid;
     private Clock clock;
