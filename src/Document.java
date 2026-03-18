@@ -8,7 +8,7 @@ public class Document {
         this.crdtInstance = new CharCRDT(CurrentUserID);
     }
 
-    public String RenderDocument(){  // <--- Capital 'S' here!
+    public String RenderDocument(){
         List<CharNode> NodesList = crdtInstance.getOrderedNodes();
 
         StringBuilder textBuilder = new StringBuilder();
@@ -17,7 +17,7 @@ public class Document {
             textBuilder.append(node.getValue());
         }
 
-        return textBuilder.toString(); //Changes
+        return textBuilder.toString();
     }
 
     public void LocalInsert(char value, int index){
