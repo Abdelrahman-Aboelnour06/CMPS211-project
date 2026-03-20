@@ -57,7 +57,7 @@ private final List<BlockNode> children;
         return charCRDT.getOrderedNodes();
     }
 
-    public boolean moveAllTextToAfterLine(BlockNode targetNode,int splitLineCount) {
+    public boolean moveTextFromLine(BlockNode targetNode,int splitLineCount) {
         int currentLines = 0;
         CharID lastCharID = targetNode.getLastCharID();
 
@@ -76,6 +76,35 @@ private final List<BlockNode> children;
                 currentLines++;
             }
         }
+        return true;
+    }
+    public boolean moveAllText(BlockNode targetNode) {
+        return this.moveTextFromLine(targetNode,0);
+    }
+
+    public boolean moveTextFromIndex(BlockNode targetNode, int startIndex) {
+        if (targetNode == null || startIndex < 0) {
+            return false;
+        }
+
+        List<CharNode> chars = getChars();
+        if (startIndex > chars.size()) {
+            return false;
+        }
+
+        CharID lastCharID = targetNode.getLastCharID();
+
+        for (int i = startIndex; i < chars.size(); i++) {
+            CharNode current = chars.get(i);
+            CharNode newChar = targetNode.addChar(lastCharID, current.getValue());
+            if (newChar == null) {
+                return false;
+            }
+
+            lastCharID = newChar.getID();
+            current.SetDeleted(true);
+        }
+
         return true;
     }
 
