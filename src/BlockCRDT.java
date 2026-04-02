@@ -91,6 +91,9 @@ public class BlockCRDT {
         }
 
         chars.get(index).SetDeleted(true);
+
+
+        checkAndSplit_Merge(blockID);
         return true;
     }
 
@@ -252,6 +255,10 @@ public class BlockCRDT {
         }
 
         return null;
+    }
+
+    public BlockNode getBlock(BlockID id) {
+        return getNode(id);
     }
 
 

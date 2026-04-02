@@ -18,6 +18,14 @@ public class CharCRDT {
         this.nodeMap.put(rootID, root);
     }
 
+    public CharCRDT(int userid, Clock clock) {
+        this.userid = userid;
+        this.clock = clock;     // <--- USE THE SHARED CLOCK
+        this.root = new CharNode(rootID, null, '\0');
+        this.nodeMap = new HashMap<>();
+        this.nodeMap.put(rootID, root);
+    }
+
     public CharID generateID() {
 
         return new CharID(userid, clock.tick());
@@ -59,6 +67,23 @@ public class CharCRDT {
         return null;
     }
 
+
+    public void RemotelyInsertion(CharID incomingID, CharID parentID, char value) {
+        if (nodeMap.containsKey(incomingID)) {
+            return;
+        }
+
+        CharNode parent = nodeMap.get(parentID);
+
+        if (parent != null) {
+            CharNode incomingNode = new CharNode(incomingID, parentID, value);
+
+            parent.addChild(incomingNode);
+            nodeMap.put(incomingID, incomingNode);
+        } else {
+            System.out.println("Error: Parent " + parentID + " not found for incoming character '" + value + "'");
+        }
+    }
 
 
 }
