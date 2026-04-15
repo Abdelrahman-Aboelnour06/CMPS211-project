@@ -9,6 +9,9 @@ public class CharNode {
     private boolean del;
     private final List<CharNode> children;
 
+    private boolean isBold;
+    private boolean isItalic;
+
     public CharNode(CharID id, CharID parentID, char value) {
         this.id = id;
         this.parentID = parentID;
@@ -16,7 +19,18 @@ public class CharNode {
         this.del = false;
         this.children = new ArrayList<>();
 
+        // Nodes start out as normal, unformatted text by default
+        this.isBold = false;
+        this.isItalic = false;
+
     }
+
+    // --- NEW GETTERS AND SETTERS FOR FORMATTING ---
+    public boolean isBold() { return isBold; }
+    public void setBold(boolean bold) { this.isBold = bold; }
+
+    public boolean isItalic() { return isItalic; }
+    public void setItalic(boolean italic) { this.isItalic = italic; }
 
     public CharID getID() {
         return id;
