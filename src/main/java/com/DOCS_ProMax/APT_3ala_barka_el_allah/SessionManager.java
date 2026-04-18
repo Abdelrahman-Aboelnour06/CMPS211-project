@@ -90,4 +90,11 @@ public class SessionManager {
         public List<WebSocketSession> getClients() { return clients; }
         public String getCode() { return code; }
     }
+
+    public List<WebSocketSession> getAllClientsInSession(String code) {
+        Session session = sessions.get(code.toUpperCase());
+        if (session == null) return new ArrayList<>();
+        return new ArrayList<>(session.getClients());
+    }
 }
+
