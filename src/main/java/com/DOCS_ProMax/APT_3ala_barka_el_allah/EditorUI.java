@@ -7,10 +7,14 @@ import java.awt.event.KeyEvent;
 import javax.swing.text.StyledDocument;
 import javax.swing.text.StyleConstants;
 import javax.swing.text.SimpleAttributeSet;
+import java.util.HashMap;
 import java.util.List;
 import javax.swing.UIManager;
 import java.awt.Insets;
 import java.awt.Font;
+import javax.swing.text.*;
+import java.awt.Color;
+import java.util.Map;
 
 public class EditorUI {
 
@@ -19,15 +23,23 @@ public class EditorUI {
     private JTextPane textPane;
     private String username;
     private String sessionCode;
-    private DummySessionService sessionService;
+    //private DummySessionService sessionService;
+    private Client client;
     private DefaultListModel<String> usersListModel;
     private JList<String> usersList;
-    private SessionUsersListener usersListener;
+    //cursor
+    private java.util.Map<String, Integer> remoteCursors = new java.util.HashMap<>();
+    private DefaultListModel<String> cursorListModel;
+    private JList<String> cursorList;
+    private Highlighter highlighter;
+    private Map<String, Object> cursorHighlights = new HashMap<>();
+    private Map<String, Color> userColors = new HashMap<>();
+    //private SessionUsersListener usersListener;
 
     // 1. Declare your Document manager
     private Document doc;
 
-    public EditorUI(String username, String sessionCode,DummySessionService sessionService) {
+    public EditorUI(String username, String sessionCode, Client client) {
 
         // --- MAKE IT LOOK MODERN ---
         try {
@@ -41,7 +53,41 @@ public class EditorUI {
         this.doc = new Document(new java.util.Random().nextInt(1000));
         this.username = username;
         this.sessionCode = sessionCode;
-        this.sessionService = sessionService;
+        //this.sessionService = sessionService;
+        this.client = client;
+
+        client.setMessageListener(op -> {
+            SwingUtilities.invokeLater(() -> {
+
+                switch (op.type) {
+
+                    case "ACTIVE_USERS" -> {
+                        List<String> users =
+                                new com.google.gson.Gson().fromJson(
+                                        op.payload,
+                                        new com.google.gson.reflect.TypeToken<List<String>>() {}.getType()
+                                );
+                        updateActiveUsers(users);
+                    }
+
+                    case "INSERT_CHAR", "DELETE_CHAR" -> {
+                        renderDocument(textPane.getCaretPosition());
+                        drawRemoteCursors();
+                    }
+
+                    case "CURSOR" -> {
+                        if (op.username != null && !op.username.equals(username)) {
+                            remoteCursors.put(op.username, op.cursorIndex);
+                            drawRemoteCursors();
+                            updateRemoteCursorDisplay();
+                        }
+                    }
+
+                }
+
+            });
+        });
+        client.requestActiveUsers();
         // ... use the username for the Window Title ...
         frame = new JFrame("Collaborative Editor - " + username + " (" + sessionCode + ")");
 
@@ -88,6 +134,7 @@ public class EditorUI {
             if (start != end) {
                 doc.FormatSelection(start, end, true);
                 renderDocument(textPane.getCaretPosition());
+                drawRemoteCursors();
 
                 // Re-highlight the exact same text so it stays selected!
                 textPane.setSelectionStart(start);
@@ -102,6 +149,7 @@ public class EditorUI {
             if (start != end) {
                 doc.FormatSelection(start, end, false);
                 renderDocument(textPane.getCaretPosition());
+                drawRemoteCursors();
 
                 // Re-highlight the exact same text so it stays selected!
                 textPane.setSelectionStart(start);
@@ -115,11 +163,37 @@ public class EditorUI {
 
         // Add the toolbar to the TOP of the window
         frame.add(toolBar, BorderLayout.NORTH);
+
+
+
+      //  JPanel usersPanel = createUsersPanel();
+        //frame.add(usersPanel, BorderLayout.EAST);
+
+
+        JPanel rightPanel = new JPanel();
+        rightPanel.setLayout(new BorderLayout());
+
         JPanel usersPanel = createUsersPanel();
-        frame.add(usersPanel, BorderLayout.EAST);
+        JPanel cursorPanel = createCursorPanel();
+
+        rightPanel.add(usersPanel, BorderLayout.CENTER);
+        rightPanel.add(cursorPanel, BorderLayout.SOUTH);
+
+        frame.add(rightPanel, BorderLayout.EAST);
+
 
         // --- SETUP THE TEXT AREA ---
         textPane = new JTextPane();
+
+        textPane.addCaretListener(e -> {
+            if (client != null) {
+                client.sendCursor(textPane.getCaretPosition());
+            }
+        });
+
+        highlighter = textPane.getHighlighter();
+
+
         // Give the text some breathing room and a modern, readable font
         textPane.setMargin(new Insets(20, 20, 20, 20));
         textPane.setFont(new Font("Segoe UI", Font.PLAIN, 16));
@@ -153,6 +227,7 @@ public class EditorUI {
                     // Explicitly insert exactly one newline character
                     doc.LocalInsert('\n', safeIndex);
                     renderDocument(safeIndex + 1);
+                    drawRemoteCursors();
                 }
             }
 
@@ -177,13 +252,14 @@ public class EditorUI {
                 doc.InheritFormatting(safeIndex);
 
                 renderDocument(safeIndex + 1);
+                drawRemoteCursors();
 
                 //doc.LocalInsert(typedChar, safeIndex);
                 //renderDocument(safeIndex + 1);
             }
         });
 
-        usersListener = this::updateActiveUsers;
+        /*usersListener = this::updateActiveUsers;
         sessionService.addUsersListener(sessionCode, usersListener);
         updateActiveUsers(sessionService.getUsersInSession(sessionCode));
 
@@ -192,6 +268,15 @@ public class EditorUI {
             public void windowClosing(java.awt.event.WindowEvent windowEvent) {
                 sessionService.leaveSession(username, sessionCode);
                 sessionService.removeUsersListener(sessionCode, usersListener);
+            }
+        });*/
+
+        frame.addWindowListener(new java.awt.event.WindowAdapter() {
+            @Override
+            public void windowClosing(java.awt.event.WindowEvent e) {
+                if (client != null) {
+                    client.close();
+                }
             }
         });
 
@@ -232,7 +317,88 @@ public class EditorUI {
         for (String user : users) {
             usersListModel.addElement(user);
         }
+
+        remoteCursors.keySet().removeIf(user -> !users.contains(user));
+        updateRemoteCursorDisplay();
+        drawRemoteCursors();
     }
+
+    // cursor
+    private JPanel createCursorPanel() {
+        JPanel panel = new JPanel(new BorderLayout());
+        panel.setPreferredSize(new Dimension(220, 120));
+        panel.setBorder(BorderFactory.createTitledBorder("Remote Cursors"));
+
+        cursorListModel = new DefaultListModel<>();
+        cursorList = new JList<>(cursorListModel);
+        cursorList.setFont(new Font("Segoe UI", Font.PLAIN, 14));
+
+        JScrollPane scrollPane = new JScrollPane(cursorList);
+        panel.add(scrollPane, BorderLayout.CENTER);
+
+        return panel;
+    }
+
+    private void updateRemoteCursorDisplay() {
+        cursorListModel.clear();
+
+        for (java.util.Map.Entry<String, Integer> entry : remoteCursors.entrySet()) {
+            cursorListModel.addElement(entry.getKey() + " -> " + entry.getValue());
+        }
+    }
+
+
+
+    private Color getUserColor(String user) {
+        int index = Math.abs(user.toLowerCase().hashCode()) % 4;
+
+        Color[] colors = {
+                new Color(255, 105, 180), // pink
+                Color.BLUE,
+                Color.GREEN,
+                Color.ORANGE
+        };
+
+        return colors[index];
+    }
+
+    private void drawRemoteCursors() {
+        for (Object tag : cursorHighlights.values()) {
+            highlighter.removeHighlight(tag);
+        }
+        cursorHighlights.clear();
+
+        int length = textPane.getDocument().getLength();
+
+        if (length == 0) {
+            return;
+        }
+
+        for (Map.Entry<String, Integer> entry : remoteCursors.entrySet()) {
+            String user = entry.getKey();
+            int pos = entry.getValue();
+
+            if (pos < 0 || pos >= length) {
+                continue;
+            }
+
+            try {
+                Color color = getUserColor(user);
+
+                Object tag = highlighter.addHighlight(
+                        pos,
+                        pos + 1,
+                        new DefaultHighlighter.DefaultHighlightPainter(color)
+                );
+
+                cursorHighlights.put(user, tag);
+
+            } catch (BadLocationException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
 
     // --- THE DUMB VIEW RENDERER (UPGRADED FOR RICH TEXT) ---
     private void renderDocument(int newCursorPosition) {

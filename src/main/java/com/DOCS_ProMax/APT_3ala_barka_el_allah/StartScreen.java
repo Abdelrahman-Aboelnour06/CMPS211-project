@@ -10,10 +10,21 @@ public class StartScreen {
     private JTextField sessionCodeField;
     private JLabel statusLabel;
 
-    private DummySessionService sessionService;
+   // private DummySessionService sessionService;
+    private Client client;
 
     public StartScreen() {
-        sessionService = new DummySessionService();
+        //sessionService = new DummySessionService();
+        try {
+            Clock clock = new Clock();
+            BlockCRDT doc = new BlockCRDT(1, clock);
+            BlockNode block = doc.insertTopLevelBlock(new CharCRDT(1, clock));
+
+            client = new Client("ws://localhost:8080/collab", doc, clock, block.getId());
+            client.connectBlocking();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
         initializeUI();
     }
 
@@ -63,7 +74,7 @@ public class StartScreen {
     private void handleCreateSession() {
         String username = usernameField.getText();
 
-        SessionJoinResult result = sessionService.createSession(username);
+        /*SessionJoinResult result = sessionService.createSession(username);
 
         if (result.success) {
             statusLabel.setText("Created session: " + result.sessionCode);
@@ -73,14 +84,26 @@ public class StartScreen {
             frame.dispose();
         } else {
             statusLabel.setText(result.message);
-        }
+        }*/
+        client.setMessageListener(op -> {
+            SwingUtilities.invokeLater(() -> {
+                if ("SESSION_CREATED".equals(op.type)) {
+                    new EditorUI(username, op.sessionCode, client);
+                    frame.dispose();
+                } else if ("ERROR".equals(op.type)) {
+                    statusLabel.setText(op.payload);
+                }
+            });
+        });
+
+        client.createSession(username);
     }
 
     private void handleJoinSession() {
         String username = usernameField.getText();
         String sessionCode = sessionCodeField.getText();
 
-        SessionJoinResult result = sessionService.joinSession(username, sessionCode);
+       /* SessionJoinResult result = sessionService.joinSession(username, sessionCode);
 
         if (result.success) {
             statusLabel.setText("Joined session: " + result.sessionCode);
@@ -90,11 +113,24 @@ public class StartScreen {
             frame.dispose();
         } else {
             statusLabel.setText(result.message);
-        }
+        }*/
+        client.setMessageListener(op -> {
+            SwingUtilities.invokeLater(() -> {
+                if ("SESSION_JOINED".equals(op.type)) {
+                    new EditorUI(username, op.sessionCode, client);
+                    frame.dispose();
+                } else if ("ERROR".equals(op.type)) {
+                    statusLabel.setText(op.payload);
+                }
+            });
+        });
+
+        client.joinSession(username, sessionCode);
     }
 
     public static void main(String[] args) {
+       // SwingUtilities.invokeLater(StartScreen::new);
+        //new StartScreen();
         SwingUtilities.invokeLater(StartScreen::new);
-        new StartScreen();
     }
 }

@@ -60,6 +60,7 @@ public class Server extends TextWebSocketHandler {
                     response.type        = "SESSION_CREATED";
                     response.sessionCode = s.getCode();
                     sendTo(session, response.toJson());
+                    broadcastActiveUsers(s.getCode());
 
                     System.out.println("[Server] Session created: " + s.getCode()
                             + " by " + op.username);
@@ -89,6 +90,7 @@ public class Server extends TextWebSocketHandler {
                         broadcastActiveUsers(s.getCode());
                         System.out.println("[Server] " + op.username + " joined " + s.getCode());
                     }
+
                 }
 
                 // ----------------------------------------------------------
@@ -116,6 +118,14 @@ public class Server extends TextWebSocketHandler {
                     for (WebSocketSession other : others) {
                         sendTo(other, payload);
                     }
+                }
+                case "GET_ACTIVE_USERS" -> {
+                    String code = sessionManager.getSessionCode(session);
+                    if (code == null) {
+                        sendError(session, "Not in a session");
+                        return;
+                    }
+                    broadcastActiveUsers(code);
                 }
 
                 // ----------------------------------------------------------

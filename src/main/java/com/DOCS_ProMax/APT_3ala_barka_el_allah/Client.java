@@ -213,6 +213,13 @@ public class Client extends WebSocketClient {
         send(op.toJson());
     }
 
+    public void requestActiveUsers() {
+        Operations op = new Operations();
+        op.type = "GET_ACTIVE_USERS";
+        op.sessionCode = sessionCode;
+        send(op.toJson());
+    }
+
     // -----------------------------------------------------------------------
     // Getters / setters
     // -----------------------------------------------------------------------
