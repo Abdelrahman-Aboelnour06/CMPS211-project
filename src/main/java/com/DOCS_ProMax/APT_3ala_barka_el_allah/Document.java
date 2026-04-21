@@ -11,6 +11,10 @@ public class Document {
         this.crdtInstance = new CharCRDT(CurrentUserID);
     }
 
+    public Document(CharCRDT existingCRDT) {
+        this.crdtInstance = existingCRDT;
+    }
+
     public String RenderDocument(){
         List<CharNode> NodesList = crdtInstance.getOrderedNodes();
 
@@ -36,7 +40,7 @@ public class Document {
         return visibleNodes;
     }
 
-    public void LocalInsert(char value, int index){
+    /*public void LocalInsert(char value, int index){
         List<CharNode> NodesList = crdtInstance.getOrderedNodes();
         CharID parentID;
         if (index==0){
@@ -60,6 +64,30 @@ public class Document {
         } else {
             System.out.println("Warning: Attempted to delete invalid index: " + index);
         }
+    }*/
+
+    // REPLACE LocalInsert — now returns the inserted CharNode
+    public CharNode LocalInsert(char value, int index) {
+        List<CharNode> NodesList = crdtInstance.getOrderedNodes();
+        CharID parentID;
+        if (index == 0) {
+            parentID = crdtInstance.rootID;
+        } else {
+            parentID = NodesList.get(index - 1).getID();
+        }
+        return crdtInstance.insertNode(parentID, value);   // <-- returns CharNode
+    }
+
+    // REPLACE LocalDelete — now returns the deleted CharNode
+    public CharNode LocalDelete(int index) {
+        List<CharNode> NodesList = crdtInstance.getOrderedNodes();
+        if (index >= 0 && index < NodesList.size()) {
+            CharNode deleted = NodesList.get(index);
+            deleted.SetDeleted(true);
+            return deleted;   // <-- returns CharNode
+        }
+        System.out.println("Warning: Attempted to delete invalid index: " + index);
+        return null;
     }
 
     // Flips the bold or italic switch for a specific range of highlighted text

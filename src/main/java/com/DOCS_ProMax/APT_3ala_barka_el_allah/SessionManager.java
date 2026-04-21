@@ -13,6 +13,8 @@ public class SessionManager {
     private final Map<WebSocketSession, String>  clientNames   = new HashMap<>();
     private final Map<WebSocketSession, String>  clientSessions = new HashMap<>();
 
+
+
     // -----------------------------------------------------------------------
     // Session lifecycle
     // -----------------------------------------------------------------------
@@ -24,6 +26,10 @@ public class SessionManager {
         clientNames.put(conn, username);
         clientSessions.put(conn, editorCode);
         return session;
+    }
+
+    public Session getSession(String code) {
+        return sessions.get(code.toUpperCase());
     }
 
     public Session joinSession(String code, WebSocketSession conn, String username) {
@@ -111,7 +117,7 @@ public class SessionManager {
     // Inner Session class
     // -----------------------------------------------------------------------
 
-    public static class Session {
+    /*public static class Session {
         private final String code;
         private final List<WebSocketSession> clients = new ArrayList<>();
 
@@ -124,5 +130,23 @@ public class SessionManager {
         public void removeClient(WebSocketSession conn) { clients.remove(conn); }
         public List<WebSocketSession> getClients()      { return clients; }
         public String getCode()                         { return code; }
+    }/
+     */
+    public static class Session {
+        private final String code;
+        private final List<WebSocketSession> clients = new ArrayList<>();
+        private final List<String> operationLog = new ArrayList<>(); // stores all past ops
+
+        public Session(String code, String ownerName, WebSocketSession owner) {
+            this.code = code;
+            this.clients.add(owner);
+        }
+
+        public void addClient(WebSocketSession conn)    { clients.add(conn); }
+        public void removeClient(WebSocketSession conn) { clients.remove(conn); }
+        public List<WebSocketSession> getClients()      { return clients; }
+        public String getCode()                         { return code; }
+        public void logOperation(String json)           { operationLog.add(json); }
+        public List<String> getOperationLog()           { return operationLog; }
     }
 }

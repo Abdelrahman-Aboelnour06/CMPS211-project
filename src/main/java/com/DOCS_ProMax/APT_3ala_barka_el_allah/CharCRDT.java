@@ -64,9 +64,9 @@ public class CharCRDT {
         return null;
     }
 
-    public void RemotelyInsertion(CharID incomingID, CharID parentID, char value) {
+    public CharNode RemotelyInsertion(CharID incomingID, CharID parentID, char value) {
         if (nodeMap.containsKey(incomingID)) {
-            return;
+            return null;
         }
 
         CharNode parent = nodeMap.get(parentID);
@@ -77,8 +77,10 @@ public class CharCRDT {
             nodeMap.put(incomingID, incomingNode);
             // Advance our clock so future local IDs are always greater than any received remote ID
             clock.advanceTo(incomingID.getClock());
+            return incomingNode;
         } else {
             System.out.println("Error: Parent " + parentID + " not found for incoming character '" + value + "'");
+            return null;
         }
     }
 }

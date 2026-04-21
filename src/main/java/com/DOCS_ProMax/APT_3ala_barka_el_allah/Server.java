@@ -86,6 +86,12 @@ public class Server extends TextWebSocketHandler {
                         response.type        = "SESSION_JOINED";
                         response.sessionCode = s.getCode();
                         sendTo(session, response.toJson());
+                        System.out.println("[Server] Operation log size for " + s.getCode() + ": " + s.getOperationLog().size()); // ADD THIS
+
+                        // ADD THIS BLOCK:
+                        for (String pastOp : s.getOperationLog()) {
+                            sendTo(session, pastOp);
+                        }
 
                         broadcastActiveUsers(s.getCode());
                         System.out.println("[Server] " + op.username + " joined " + s.getCode());
@@ -102,6 +108,7 @@ public class Server extends TextWebSocketHandler {
                         sendError(session, "Not in a session");
                         return;
                     }
+                    sessionManager.getSession(code).logOperation(message.getPayload());
                     List<WebSocketSession> others = sessionManager.getOtherClients(session);
                     String payload = message.getPayload();
                     for (WebSocketSession other : others) {
@@ -126,6 +133,17 @@ public class Server extends TextWebSocketHandler {
                         return;
                     }
                     broadcastActiveUsers(code);
+                }
+
+                //NEW
+
+                case "FORMAT_CHAR" -> {
+                    String code = sessionManager.getSessionCode(session);
+                    if (code == null) { sendError(session, "Not in a session"); return; }
+                    sessionManager.getSession(code).logOperation(message.getPayload());
+                    List<WebSocketSession> others = sessionManager.getOtherClients(session);
+                    String payload = message.getPayload();
+                    for (WebSocketSession other : others) sendTo(other, payload);
                 }
 
                 // ----------------------------------------------------------

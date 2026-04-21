@@ -34,6 +34,8 @@ public class EditorUI {
     private Highlighter highlighter;
     private Map<String, Object> cursorHighlights = new HashMap<>();
     private Map<String, Color> userColors = new HashMap<>();
+
+
     //private SessionUsersListener usersListener;
 
     // 1. Declare your Document manager
@@ -50,7 +52,12 @@ public class EditorUI {
         // 2. Initialize the Document with userID 1
         //doc = new Document(1);
 
-        this.doc = new Document(new java.util.Random().nextInt(1000));
+       // this.doc = new Document(new java.util.Random().nextInt(1000));
+
+        // Use the Client's CRDT so UI and network share the same data
+        CharCRDT sharedCRDT = client.getActiveCharCRDT();
+        this.doc = new Document(sharedCRDT);
+
         this.username = username;
         this.sessionCode = sessionCode;
         //this.sessionService = sessionService;
@@ -70,9 +77,39 @@ public class EditorUI {
                         updateActiveUsers(users);
                     }
 
-                    case "INSERT_CHAR", "DELETE_CHAR" -> {
+                   /* case "INSERT_CHAR", "DELETE_CHAR" -> {
+                        renderDocument(textPane.getCaretPosition());
+
+                        drawRemoteCursors();
+                    }*/
+
+                    case "INSERT_CHAR", "DELETE_CHAR", "FORMAT_CHAR" -> {
                         renderDocument(textPane.getCaretPosition());
                         drawRemoteCursors();
+                    }
+
+                    /*case "SESSION_JOINED" -> {
+                        // Small delay to let all replayed ops arrive and apply first
+                        new javax.swing.Timer(300, e -> {
+                            renderDocument(0);
+                            drawRemoteCursors();
+                        }) {{ setRepeats(false); }}.start();
+                    }*/
+
+                    case "SESSION_JOINED" -> {
+                        // Poll every 200ms until content appears, max 5 seconds
+                        javax.swing.Timer poller = new javax.swing.Timer(200, null);
+                        int[] attempts = {0};
+                        poller.addActionListener(ev -> {
+                            attempts[0]++;
+                            renderDocument(0);
+                            drawRemoteCursors();
+                            // Stop after content appears OR after 5 seconds
+                            if (!doc.GetVisibleNodes().isEmpty() || attempts[0] >= 25) {
+                                poller.stop();
+                            }
+                        });
+                        poller.start();
                     }
 
                     case "CURSOR" -> {
@@ -86,6 +123,11 @@ public class EditorUI {
                 }
 
             });
+        });
+        // ADD THIS — render whatever is already in the CRDT right now
+        SwingUtilities.invokeLater(() -> {
+            renderDocument(0);
+            drawRemoteCursors();
         });
         client.requestActiveUsers();
         // ... use the username for the Window Title ...
@@ -133,6 +175,10 @@ public class EditorUI {
 
             if (start != end) {
                 doc.FormatSelection(start, end, true);
+
+                // broadcast each formatted node
+                List<CharNode> visible = doc.GetVisibleNodes();
+                for (int i = start; i < end; i++) client.sendFormat(visible.get(i));
                 renderDocument(textPane.getCaretPosition());
                 drawRemoteCursors();
 
@@ -148,6 +194,9 @@ public class EditorUI {
 
             if (start != end) {
                 doc.FormatSelection(start, end, false);
+                List<CharNode> visible = doc.GetVisibleNodes();
+                for (int i = start; i < end; i++) client.sendFormat(visible.get(i));
+
                 renderDocument(textPane.getCaretPosition());
                 drawRemoteCursors();
 
@@ -160,6 +209,25 @@ public class EditorUI {
         // Add the buttons to the toolbar
         toolBar.add(boldBtn);
         toolBar.add(italicBtn);
+
+        // ADD after toolBar.add(italicBtn);
+        JLabel codeLabel = new JLabel("  Session: " + sessionCode);
+        codeLabel.setFont(new Font("Segoe UI", Font.BOLD, 13));
+        codeLabel.setForeground(new Color(0, 100, 180));
+
+        JButton copyBtn = new JButton("Copy Code");
+        copyBtn.setFocusable(false);
+        copyBtn.addActionListener(ev -> {
+            java.awt.Toolkit.getDefaultToolkit()
+                    .getSystemClipboard()
+                    .setContents(new java.awt.datatransfer.StringSelection(sessionCode), null);
+            copyBtn.setText("Copied!");
+            new javax.swing.Timer(1500, t -> copyBtn.setText("Copy Code")).start();
+        });
+
+        toolBar.addSeparator();
+        toolBar.add(codeLabel);
+        toolBar.add(copyBtn);
 
         // Add the toolbar to the TOP of the window
         frame.add(toolBar, BorderLayout.NORTH);
@@ -212,7 +280,10 @@ public class EditorUI {
                     int cursorPosition = textPane.getCaretPosition();
 
                     if (cursorPosition > 0) {
-                        doc.LocalDelete(cursorPosition - 1);
+                        CharNode deleted =doc.LocalDelete(cursorPosition - 1);
+
+                        if (deleted != null) client.sendDeleteChar(deleted);
+
                         renderDocument(cursorPosition - 1);
                     }
                 }
@@ -225,7 +296,8 @@ public class EditorUI {
                     int safeIndex = Math.min(cursorPosition, doc.RenderDocument().length());
 
                     // Explicitly insert exactly one newline character
-                    doc.LocalInsert('\n', safeIndex);
+                    CharNode inserted = doc.LocalInsert('\n', safeIndex);   // returns node
+                    if (inserted != null) client.sendInsertChar(inserted);  // ADD THIS LINE
                     renderDocument(safeIndex + 1);
                     drawRemoteCursors();
                 }
@@ -246,10 +318,14 @@ public class EditorUI {
 
                 // THE CLAMP: Protects normal typing from OS index bugs
 
-                doc.LocalInsert(typedChar, safeIndex);
+                CharNode inserted = doc.LocalInsert(typedChar, safeIndex);
+
+                doc.InheritFormatting(safeIndex);
+
+                if (inserted != null) client.sendInsertChar(inserted);
 
                 // Copy the formatting of the letter we just typed next to!
-                doc.InheritFormatting(safeIndex);
+
 
                 renderDocument(safeIndex + 1);
                 drawRemoteCursors();

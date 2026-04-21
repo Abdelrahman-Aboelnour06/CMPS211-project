@@ -59,6 +59,7 @@ public class Client extends WebSocketClient {
 
     @Override
     public void onMessage(String rawJson) {
+        System.out.println("[Client] RAW MESSAGE: " + rawJson); // ADD THIS
         Operations op = Operations.fromJson(rawJson);
         if (op == null) return;
 
@@ -89,8 +90,14 @@ public class Client extends WebSocketClient {
                 // Apply to the local CRDT block
                 BlockNode block = localDoc.getBlock(activeBlockID);
                 if (block != null && block.getContent() != null) {
-                    block.getContent().RemotelyInsertion(incomingID, parentID, op.value);
+                   CharNode inserted= block.getContent().RemotelyInsertion(incomingID, parentID, op.value);
+                    if (inserted != null) {         // ADD THESE 3 LINES
+                        inserted.setBold(op.isBold);
+                        inserted.setItalic(op.isItalic);
+                    }
                 }
+
+
             }
 
             case "DELETE_CHAR" -> {
@@ -113,6 +120,18 @@ public class Client extends WebSocketClient {
 
             case "ERROR" -> {
                 System.err.println("[Client] Server error: " + op.payload);
+            }
+
+            case "FORMAT_CHAR" -> {
+                CharID targetID = new CharID(op.charUser, op.charClock);
+                BlockNode block = localDoc.getBlock(activeBlockID);
+                if (block != null) {
+                    CharNode node = block.getContent().getNode(targetID);
+                    if (node != null) {
+                        node.setBold(op.isBold);
+                        node.setItalic(op.isItalic);
+                    }
+                }
             }
 
             default -> {
@@ -178,6 +197,8 @@ public class Client extends WebSocketClient {
         op.parentUser  = inserted.getParentID().getUserID();
         op.parentClock = inserted.getParentID().getClock();
         op.value       = inserted.getValue();
+        op.isBold      = inserted.isBold();    // ADD THIS
+        op.isItalic    = inserted.isItalic();  // ADD THIS
 
         send(op.toJson());
     }
@@ -229,4 +250,24 @@ public class Client extends WebSocketClient {
 
     public void setActiveBlockID(BlockID id)           { this.activeBlockID = id; }
     public void setMessageListener(MessageListener ml) { this.messageListener = ml; }
+    public CharCRDT getActiveCharCRDT() {
+        BlockNode block = localDoc.getBlock(activeBlockID);
+        if (block != null) return block.getContent();
+        return null;
+
+
+    }
+
+    public void sendFormat(CharNode node) {
+        Operations op = new Operations();
+        op.type        = "FORMAT_CHAR";
+        op.sessionCode = sessionCode;
+        op.username    = username;
+        op.charUser    = node.getID().getUserID();
+        op.charClock   = node.getID().getClock();
+        op.isBold      = node.isBold();
+        op.isItalic    = node.isItalic();
+        send(op.toJson());
+    }
+
 }
