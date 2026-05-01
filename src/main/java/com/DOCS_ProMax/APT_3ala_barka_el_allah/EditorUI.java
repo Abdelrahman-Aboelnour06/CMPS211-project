@@ -231,9 +231,36 @@ public class EditorUI {
             new javax.swing.Timer(1500, t -> copyBtn.setText("Copy Code")).start();
         });
 
+        /*toolBar.addSeparator();
+        toolBar.add(codeLabel);
+        toolBar.add(copyBtn);*/
+
+        JButton importBtn = new JButton("Import");
+        JButton exportBtn = new JButton("Export");
+        importBtn.setFocusable(false);
+        exportBtn.setFocusable(false);
+        importBtn.setFont(buttonFont);
+        exportBtn.setFont(buttonFont);
+        importBtn.setMargin(new Insets(10, 25, 10, 25));
+        exportBtn.setMargin(new Insets(10, 25, 10, 25));
+
+        importBtn.addActionListener(e -> onImport());
+        exportBtn.addActionListener(e -> onExport());
+
+        JButton saveBtn = new JButton("Save");
+        saveBtn.setFocusable(false);
+        saveBtn.setFont(buttonFont);
+        saveBtn.setMargin(new Insets(10, 25, 10, 25));
+        saveBtn.addActionListener(e -> onSave());
+
+        toolBar.addSeparator();
+        toolBar.add(importBtn);
+        toolBar.add(exportBtn);
+        toolBar.add(saveBtn);
         toolBar.addSeparator();
         toolBar.add(codeLabel);
         toolBar.add(copyBtn);
+
 
         // Add the toolbar to the TOP of the window
         frame.add(toolBar, BorderLayout.NORTH);
@@ -608,6 +635,53 @@ public class EditorUI {
             }
         }
     }
+    private void onImport() {
+        JFileChooser chooser = new JFileChooser();
+        chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("Text files (*.txt)", "txt"));
+        if (chooser.showOpenDialog(frame) != JFileChooser.APPROVE_OPTION) return;
 
+        String content;
+        try {
+            content = java.nio.file.Files.readString(chooser.getSelectedFile().toPath());
+        } catch (java.io.IOException ex) {
+            JOptionPane.showMessageDialog(frame, "Failed to read file: " + ex.getMessage());
+            return;
+        }
+
+        int startIndex = doc.RenderDocument().length();
+        for (int i = 0; i < content.length(); i++) {
+            CharNode inserted = doc.LocalInsert(content.charAt(i), startIndex + i);
+            if (inserted != null) client.sendInsertChar(inserted);
+        }
+        renderDocument(doc.RenderDocument().length());
+        drawRemoteCursors();
+    }
+
+    private void onExport() {
+        JFileChooser chooser = new JFileChooser();
+        chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("Text files (*.txt)", "txt"));
+        chooser.setSelectedFile(new java.io.File("document.txt"));
+        if (chooser.showSaveDialog(frame) != JFileChooser.APPROVE_OPTION) return;
+
+        java.io.File file = chooser.getSelectedFile();
+        if (!file.getName().endsWith(".txt")) file = new java.io.File(file.getAbsolutePath() + ".txt");
+
+        try (java.io.PrintWriter pw = new java.io.PrintWriter(new java.io.FileWriter(file))) {
+            pw.print(doc.RenderDocument());
+            JOptionPane.showMessageDialog(frame, "Exported successfully to: " + file.getName());
+        } catch (java.io.IOException ex) {
+            JOptionPane.showMessageDialog(frame, "Failed to export: " + ex.getMessage());
+        }
+    }
+    private void onSave() {
+        CharCRDT crdt = client.getActiveCharCRDT();
+        if (crdt == null) {
+            JOptionPane.showMessageDialog(frame, "Not connected to a session.");
+            return;
+        }
+        String crdtJson = CrdtSerializer.toJson(crdt);
+        client.sendSaveDoc(crdtJson);
+        JOptionPane.showMessageDialog(frame, "Document saved successfully.");
+    }
 
 }
