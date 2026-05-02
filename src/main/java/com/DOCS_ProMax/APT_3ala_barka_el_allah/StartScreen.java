@@ -95,7 +95,7 @@ public class StartScreen {
         client.setMessageListener(op -> {
             SwingUtilities.invokeLater(() -> {
                 if ("SESSION_CREATED".equals(op.type)) {
-                    new EditorUI(username, op.sessionCode, client);
+                    new EditorUI(username, op.sessionCode, client,"Untitled");
                     frame.dispose();
                 } else if ("ERROR".equals(op.type)) {
                     statusLabel.setText(op.payload);
@@ -124,7 +124,7 @@ public class StartScreen {
         client.setMessageListener(op -> {
             SwingUtilities.invokeLater(() -> {
                 if ("SESSION_JOINED".equals(op.type)) {
-                    new EditorUI(username, op.sessionCode, client);
+                    new EditorUI(username, op.sessionCode, client,"Untitled");
                     frame.dispose();
                 } else if ("ERROR".equals(op.type)) {
                     statusLabel.setText(op.payload);
@@ -193,7 +193,12 @@ public class StartScreen {
             row.setBorder(BorderFactory.createEmptyBorder(8, 10, 8, 10));
             row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 50));
 
-            JLabel info = new JLabel("Editor: " + editorCode + "   Viewer: " + viewerCode);
+            //JLabel info = new JLabel("Editor: " + editorCode + "   Viewer: " + viewerCode);
+            String docName = doc.has("documentName") && !doc.get("documentName").getAsString().isBlank()
+                    ? doc.get("documentName").getAsString()
+                    : "Untitled";
+            JLabel info = new JLabel("<html><b>" + docName + "</b> &nbsp;|&nbsp; Editor: "
+                    + editorCode + "  Viewer: " + viewerCode + "</html>");
             info.setFont(new Font("Segoe UI", Font.PLAIN, 13));
 
             JButton openBtn   = new JButton("Open");
@@ -254,7 +259,7 @@ public class StartScreen {
                         }
                         // Use the ORIGINAL editor code, not a new one
                         client.setOriginalEditorCode(editorCode);
-                        new EditorUI(username, op.editorCode, client);
+                        new EditorUI(username, op.editorCode, client,docName);
                         frame.dispose();
 
                     } else if ("ERROR".equals(op.type)) {
@@ -299,12 +304,47 @@ public class StartScreen {
                     renameOp.username    = username;
                     renameOp.payload     = newName.trim();
                     // Wait for server confirmation BEFORE refreshing the list
-                    client.setMessageListener(op -> SwingUtilities.invokeLater(() -> {
+                    /*client.setMessageListener(op -> SwingUtilities.invokeLater(() -> {
                         if ("DOC_RENAMED".equals(op.type)) {
+                            JOptionPane.showMessageDialog(frame,"File renamed to: " + op.payload,
+                                    "Renamed",
+                                    JOptionPane.INFORMATION_MESSAGE
+                            );
                             dialog.dispose();
                             handleMyDocuments(); // now the DB has the new name
                         } else if ("ERROR".equals(op.type)) {
-                            statusLabel.setText(op.payload);
+                            JOptionPane.showMessageDialog(
+                                    frame, op.payload, "Error", JOptionPane.ERROR_MESSAGE
+                            );
+                           // statusLabel.setText(op.payload);
+                        }
+                    }));*/
+                    client.setMessageListener(op -> SwingUtilities.invokeLater(() -> {
+                        if ("DOC_RENAMED".equals(op.type)) {
+                            JOptionPane.showMessageDialog(
+                                    frame,
+                                    "File renamed to: \"" + op.payload + "\"",
+                                    "Renamed",
+                                    JOptionPane.INFORMATION_MESSAGE
+                            );
+                            dialog.dispose();
+                            // Reset listener to handle DOCS_LIST before calling handleMyDocuments
+                            client.setMessageListener(op2 -> SwingUtilities.invokeLater(() -> {
+                                if ("DOCS_LIST".equals(op2.type)) {
+                                    showDocumentsDialog(username, op2.payload);
+                                } else if ("ERROR".equals(op2.type)) {
+                                    statusLabel.setText(op2.payload);
+                                }
+                            }));
+                            Operations listOp = new Operations();
+                            listOp.type          = "LIST_DOCS";
+                            listOp.ownerUsername = username;
+                            client.send(listOp.toJson());
+
+                        } else if ("ERROR".equals(op.type)) {
+                            JOptionPane.showMessageDialog(
+                                    frame, op.payload, "Error", JOptionPane.ERROR_MESSAGE
+                            );
                         }
                     }));
 

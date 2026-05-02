@@ -158,14 +158,39 @@ public class Server extends TextWebSocketHandler {
                 // CRDT OPERATIONS  (editor-only for mutating ops)
                 // ==============================================================
 
-                case "INSERT_CHAR", "DELETE_CHAR" -> {
+                /*case "INSERT_CHAR", "DELETE_CHAR" -> {
                     // Member 2: reject if viewer
                     if (!sessionManager.isEditor(session)) {
                         sendError(session, "Viewers cannot edit the document");
                         return;
                     }
                     relayAndLog(session, message.getPayload(), op, true);
+                }*/
+
+                case "INSERT_CHAR", "DELETE_CHAR" -> {
+                    if (!sessionManager.isEditor(session)) {
+                        sendError(session, "Viewers cannot edit the document"); return;
+                    }
+                    // Auto-delete any comment attached to a deleted char
+                    if ("DELETE_CHAR".equals(op.type) && documentRepository != null) {
+                        String code = sessionManager.getSessionCode(session);
+                        Optional<DocumentEntity> found = documentRepository.findByEditorCode(code);
+                        found.ifPresent(d -> {
+                            boolean changed = d.getComments()
+                                    .removeIf(c -> c.startCharUser == op.charUser && c.startCharClock == op.charClock);
+                            if (changed) {
+                                documentRepository.save(d);
+                                Operations notify = new Operations();
+                                notify.type    = "COMMENT_DELETED";
+                                notify.payload = "auto";
+                                broadcastToAll(code, notify.toJson());
+                            }
+                        });
+                    }
+                    relayAndLog(session, message.getPayload(), op, true);
                 }
+
+
 
                 case "FORMAT_CHAR" -> {
                     if (!sessionManager.isEditor(session)) {
@@ -446,6 +471,81 @@ public class Server extends TextWebSocketHandler {
                     resp.payload = op.payload.trim();
                     sendTo(session, resp.toJson());
                     System.out.println("[Server] Document renamed to: " + op.payload.trim());
+                }
+
+                case "ADD_COMMENT" -> {
+                    if (documentRepository == null) { sendError(session, "Database not configured"); return; }
+                    if (!sessionManager.isEditor(session)) { sendError(session, "Viewers cannot comment"); return; }
+                    String code = sessionManager.getSessionCode(session);
+                    if (code == null) { sendError(session, "Not in a session"); return; }
+
+                    Optional<DocumentEntity> found = documentRepository.findByEditorCode(code);
+                    if (found.isEmpty()) { sendError(session, "Document not found — save first"); return; }
+
+                    Comment c = new Comment(
+                            java.util.UUID.randomUUID().toString(),
+                            op.username, op.commentText,
+                            op.charUser, op.charClock,
+                            op.endCharUser, op.endCharClock
+                    );
+                    found.get().getComments().add(c);
+                    documentRepository.save(found.get());
+
+                    Operations resp = new Operations();
+                    resp.type    = "COMMENT_ADDED";
+                    resp.payload = gson.toJson(c);
+                    broadcastToAll(code, resp.toJson());
+                }
+
+                case "DELETE_COMMENT" -> {
+                    if (documentRepository == null) { sendError(session, "Database not configured"); return; }
+                    String code = sessionManager.getSessionCode(session);
+                    if (code == null) { sendError(session, "Not in a session"); return; }
+
+                    Optional<DocumentEntity> found = documentRepository.findByEditorCode(code);
+                    if (found.isEmpty()) { sendError(session, "Document not found"); return; }
+
+                    found.get().getComments().removeIf(c -> c.id.equals(op.commentId));
+                    documentRepository.save(found.get());
+
+                    Operations resp = new Operations();
+                    resp.type      = "COMMENT_DELETED";
+                    resp.commentId = op.commentId;
+                    broadcastToAll(code, resp.toJson());
+                }
+
+                case "GET_COMMENTS" -> {
+                    if (documentRepository == null) { sendError(session, "Database not configured"); return; }
+                    String code = sessionManager.getSessionCode(session);
+                    if (code == null) { sendError(session, "Not in a session"); return; }
+
+                    Optional<DocumentEntity> found = documentRepository.findByEditorCode(code);
+                    if (found.isEmpty()) { sendError(session, "Document not found"); return; }
+
+                    Operations resp = new Operations();
+                    resp.type    = "COMMENTS_LIST";
+                    resp.payload = gson.toJson(found.get().getComments());
+                    sendTo(session, resp.toJson());
+                }
+
+                case "RESOLVE_COMMENT" -> {
+                    if (documentRepository == null) { sendError(session, "Database not configured"); return; }
+                    String code = sessionManager.getSessionCode(session);
+                    if (code == null) { sendError(session, "Not in a session"); return; }
+
+                    Optional<DocumentEntity> found = documentRepository.findByEditorCode(code);
+                    if (found.isEmpty()) { sendError(session, "Document not found"); return; }
+
+                    found.get().getComments().stream()
+                            .filter(c -> c.id.equals(op.commentId))
+                            .findFirst()
+                            .ifPresent(c -> c.resolved = true);
+                    documentRepository.save(found.get());
+
+                    Operations resp = new Operations();
+                    resp.type      = "COMMENT_RESOLVED";
+                    resp.commentId = op.commentId;
+                    broadcastToAll(code, resp.toJson());
                 }
 
 

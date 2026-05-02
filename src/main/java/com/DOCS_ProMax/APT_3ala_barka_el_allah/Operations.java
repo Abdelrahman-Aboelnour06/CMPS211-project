@@ -59,6 +59,8 @@ public class Operations {
     public long   blockClock;
     public int    parentBlockUser;
     public long   parentBlockClock;
+    public int  endCharUser;
+    public long endCharClock;
 
     // -----------------------------------------------------------------------
     // Formatting fields
@@ -90,6 +92,11 @@ public class Operations {
 
     /** Generic JSON payload (active users list, full doc state, etc.). */
     public String payload;
+
+    //Comments
+
+    public String commentId;
+    public String commentText;
 
     // -----------------------------------------------------------------------
     // Serialisation

@@ -1,4 +1,4 @@
-﻿package com.DOCS_ProMax.APT_3ala_barka_el_allah;
+package com.DOCS_ProMax.APT_3ala_barka_el_allah;
 
 import org.java_websocket.client.WebSocketClient;
 import org.java_websocket.handshake.ServerHandshake;
@@ -154,6 +154,12 @@ public class Client extends WebSocketClient {
             }
 
             case "ERROR" -> System.err.println("[Client] Server error: " + op.payload);
+
+            //Comments CASE
+
+            case "COMMENT_ADDED", "COMMENT_DELETED", "COMMENTS_LIST", "RESOLVE_COMMENT" -> {
+                System.out.println("[Client] Comment op: " + op.type);
+            }
 
             default -> System.out.println("[Client] Unknown message type: " + op.type);
         }
@@ -327,4 +333,47 @@ public class Client extends WebSocketClient {
 
     public void setOriginalEditorCode(String code) { this.originalEditorCode = code; }
     public String getOriginalEditorCode() { return originalEditorCode; }
+
+//BONUS FOR MEMBER 3 - COMMENTS
+public void sendAddComment(String text, CharNode startNode, CharNode endNode) {
+    if (!isOpen()) return;
+    Operations op   = new Operations();
+    op.type         = "ADD_COMMENT";
+    op.sessionCode  = sessionCode;
+    op.username     = username;
+    op.commentText  = text;
+    op.charUser     = startNode.getID().getUserID();
+    op.charClock    = startNode.getID().getClock();
+    op.endCharUser  = endNode.getID().getUserID();
+    op.endCharClock = endNode.getID().getClock();
+    send(op.toJson());
+}
+
+    public void sendDeleteComment(String commentId) {
+        if (!isOpen()) return;
+        Operations op  = new Operations();
+        op.type        = "DELETE_COMMENT";
+        op.sessionCode = sessionCode;
+        op.username    = username;
+        op.commentId   = commentId;
+        send(op.toJson());
+    }
+
+    public void sendGetComments() {
+        if (!isOpen()) return;
+        Operations op  = new Operations();
+        op.type        = "GET_COMMENTS";
+        op.sessionCode = sessionCode;
+        send(op.toJson());
+    }
+
+    public void sendResolveComment(String commentId) {
+        if (!isOpen()) return;
+        Operations op  = new Operations();
+        op.type        = "RESOLVE_COMMENT";
+        op.sessionCode = sessionCode;
+        op.username    = username;
+        op.commentId   = commentId;
+        send(op.toJson());
+    }
 }

@@ -101,4 +101,8 @@ public class DocumentEntity {
     private String documentName = "Untitled";
     public String getDocumentName() { return documentName; }
     public void setDocumentName(String v) { this.documentName = v; }
+
+    private List<Comment> comments = new ArrayList<>();
+    public List<Comment> getComments()              { return comments; }
+    public void          setComments(List<Comment> c){ this.comments = c; }
 }

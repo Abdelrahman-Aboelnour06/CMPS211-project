@@ -42,12 +42,18 @@ public class EditorUI {
             new Color(255, 165, 0)    // orange
     };
 
+    //Comments
+
+    private final java.util.Map<String, Comment> activeComments    = new java.util.LinkedHashMap<>();
+    private final Map<String, Object>             commentHighlights = new HashMap<>();
+    private JPanel commentsListPanel;
+
     //private SessionUsersListener usersListener;
 
     // 1. Declare your Document manager
     private Document doc;
 
-    public EditorUI(String username, String sessionCode, Client client) {
+    public EditorUI(String username, String sessionCode, Client client,String documentName) {
 
         // --- MAKE IT LOOK MODERN ---
         try {
@@ -108,7 +114,8 @@ public class EditorUI {
                         int[] attempts = {0};
                         poller.addActionListener(ev -> {
                             attempts[0]++;
-                            renderDocument(0);
+                            int savedCaret=textPane != null ? textPane.getCaretPosition() : 0;
+                            renderDocument(savedCaret);
                             drawRemoteCursors();
                             // Stop after content appears OR after 5 seconds
                             if (!doc.GetVisibleNodes().isEmpty() || attempts[0] >= 25) {
@@ -126,6 +133,37 @@ public class EditorUI {
                         }
                     }
 
+                    case "COMMENT_ADDED" -> {
+                        Comment c = new com.google.gson.Gson().fromJson(op.payload, Comment.class);
+                        if (c != null) {
+                            activeComments.put(c.id, c);
+                            drawCommentHighlights();
+                        }
+                    }
+                    case "COMMENT_DELETED" -> {
+                        if (op.commentId != null) activeComments.remove(op.commentId);
+                        else activeComments.clear(); // auto bulk delete
+                        drawCommentHighlights();
+                    }
+                    case "COMMENTS_LIST" -> {
+                        activeComments.clear();
+                        java.util.List<Comment> list = new com.google.gson.Gson().fromJson(
+                                op.payload,
+                                new com.google.gson.reflect.TypeToken<java.util.List<Comment>>(){}.getType()
+                        );
+                        if (list != null) list.forEach(c -> activeComments.put(c.id, c));
+                        drawCommentHighlights();
+                    }
+                    case "COMMENT_RESOLVED" -> {
+                        if (op.commentId != null) {
+                            Comment c = activeComments.get(op.commentId);
+                            if (c != null) {
+                                c.resolved = true;
+                                drawCommentHighlights();
+                            }
+                        }
+                    }
+
                 }
 
             });
@@ -138,7 +176,7 @@ public class EditorUI {
         // Startup poller: replayed INSERT_CHAR ops arrive on the WebSocket thread
         // concurrently with EditorUI construction on the EDT. Poll every 250 ms for
         // up to 5 seconds so we catch any ops that land after the first render.
-        javax.swing.Timer startupPoller = new javax.swing.Timer(250, null);
+        /*javax.swing.Timer startupPoller = new javax.swing.Timer(250, null);
         int[] pollCount = {0};
         startupPoller.addActionListener(ev -> {
             pollCount[0]++;
@@ -147,9 +185,35 @@ public class EditorUI {
             if (pollCount[0] >= 20) startupPoller.stop(); // stop after 5 seconds
         });
         startupPoller.start();
+        client.requestActiveUsers();*/
+
+        javax.swing.Timer startupPoller = new javax.swing.Timer(250, null);
+        int[] pollCount = {0};
+        startupPoller.addActionListener(ev -> {
+            if (!client.isOpen()) {
+                startupPoller.stop();
+                return;
+            }
+            pollCount[0]++;
+            // Stop as soon as user starts typing
+            if (!doc.GetVisibleNodes().isEmpty() && pollCount[0] > 2) {
+                startupPoller.stop();
+                return;
+            }
+            int savedCaret = textPane != null ? textPane.getCaretPosition() : 0;
+            renderDocument(savedCaret);
+            drawRemoteCursors();
+            if (pollCount[0] >= 20) startupPoller.stop();
+        });
+        startupPoller.start();
         client.requestActiveUsers();
+
+        client.sendGetComments();
+
         // ... use the username for the Window Title ...
-        frame = new JFrame("Collaborative Editor - " + username + " (" + sessionCode + ")");
+        //frame = new JFrame("Collaborative Editor - " + username + " (" + sessionCode + ")");
+        //frame = new JFrame(documentName + " — " + username + " (" + sessionCode + ")");
+        frame = new JFrame("📄 " + documentName + "  |  " + username + "  —  " + sessionCode);
 
         // --- SETUP THE WINDOW ---
         //frame = new JFrame("Collaborative Text Editor");
@@ -286,11 +350,18 @@ public class EditorUI {
         JPanel rightPanel = new JPanel();
         rightPanel.setLayout(new BorderLayout());
 
-        JPanel usersPanel = createUsersPanel();
+        /*JPanel usersPanel = createUsersPanel();
         JPanel cursorPanel = createCursorPanel();
 
         rightPanel.add(usersPanel, BorderLayout.CENTER);
-        rightPanel.add(cursorPanel, BorderLayout.SOUTH);
+        rightPanel.add(cursorPanel, BorderLayout.SOUTH);*/
+        JPanel usersPanel = createUsersPanel();
+        JPanel cursorPanel = createCursorPanel();
+        JPanel commentsPanel = createCommentsSidebar();
+
+        rightPanel.add(usersPanel, BorderLayout.NORTH);
+        rightPanel.add(cursorPanel, BorderLayout.CENTER);
+        rightPanel.add(commentsPanel, BorderLayout.SOUTH);
 
         frame.add(rightPanel, BorderLayout.EAST);
 
@@ -305,6 +376,48 @@ public class EditorUI {
         });
 
         highlighter = textPane.getHighlighter();
+
+        JPopupMenu contextMenu = new JPopupMenu();
+        JMenuItem addCommentItem = new JMenuItem("💬 Add Comment");
+        addCommentItem.addActionListener(e -> {
+            int start = textPane.getSelectionStart();
+            int end   = textPane.getSelectionEnd();
+
+            if (start == end) {
+                JOptionPane.showMessageDialog(frame, "Highlight some text first.");
+                return;
+            }
+
+            List<CharNode> visible = doc.GetVisibleNodes();
+            if (end > visible.size()) return;
+
+            String commentText = JOptionPane.showInputDialog(frame,
+                    "Enter comment:", "Add Comment", JOptionPane.PLAIN_MESSAGE);
+            if (commentText == null || commentText.isBlank()) return;
+
+            client.sendAddComment(commentText.trim(),
+                    visible.get(start),
+                    visible.get(end - 1));
+        });
+
+        JMenuItem viewCommentsItem = new JMenuItem("📋 View Comments");
+        viewCommentsItem.addActionListener(e -> {
+            if (activeComments.isEmpty()) {
+                JOptionPane.showMessageDialog(frame, "No comments yet.");
+                return;
+            }
+            StringBuilder sb = new StringBuilder();
+            for (Comment c : activeComments.values()) {
+                sb.append("• ").append(c.authorUsername)
+                        .append(": ").append(c.text).append("\n");
+            }
+            JOptionPane.showMessageDialog(frame, sb.toString(),
+                    "Comments", JOptionPane.INFORMATION_MESSAGE);
+        });
+
+        contextMenu.add(addCommentItem);
+        contextMenu.add(viewCommentsItem);
+        textPane.setComponentPopupMenu(contextMenu);
 
 
         // Give the text some breathing room and a modern, readable font
@@ -424,7 +537,7 @@ public class EditorUI {
 
     private JPanel createUsersPanel() {
         JPanel panel = new JPanel(new BorderLayout());
-        panel.setPreferredSize(new Dimension(200, 0));
+        panel.setPreferredSize(new Dimension(200, 150));
         panel.setBorder(BorderFactory.createTitledBorder("Active Users"));
 
         usersListModel = new DefaultListModel<>();
@@ -464,7 +577,7 @@ public class EditorUI {
     // cursor
     private JPanel createCursorPanel() {
         JPanel panel = new JPanel(new BorderLayout());
-        panel.setPreferredSize(new Dimension(220, 120));
+        panel.setPreferredSize(new Dimension(220, 100));
         panel.setBorder(BorderFactory.createTitledBorder("Remote Cursors"));
 
         cursorListModel = new DefaultListModel<>();
@@ -475,6 +588,57 @@ public class EditorUI {
         panel.add(scrollPane, BorderLayout.CENTER);
 
         return panel;
+    }
+
+    private JPanel createCommentsSidebar() {
+        JPanel panel = new JPanel(new BorderLayout());
+        panel.setPreferredSize(new Dimension(220, 250));
+        panel.setBorder(BorderFactory.createTitledBorder("Comments"));
+
+        commentsListPanel = new JPanel();
+        commentsListPanel.setLayout(new BoxLayout(commentsListPanel, BoxLayout.Y_AXIS));
+
+        JScrollPane scroll = new JScrollPane(commentsListPanel);
+        panel.add(scroll, BorderLayout.CENTER);
+        return panel;
+    }
+
+    private JPanel buildCommentCard(Comment c) {
+        JPanel card = new JPanel(new BorderLayout(5, 5));
+        card.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createMatteBorder(0, 3, 0, 0,
+                        c.resolved ? Color.GRAY : new Color(255, 200, 0)),
+                BorderFactory.createEmptyBorder(8, 8, 8, 8)
+        ));
+        card.setBackground(c.resolved ? new Color(245, 245, 245) : Color.WHITE);
+        card.setMaximumSize(new Dimension(Integer.MAX_VALUE, 100));
+
+        JLabel header = new JLabel("<html><b>" + c.authorUsername + "</b> &nbsp;"
+                + new java.text.SimpleDateFormat("HH:mm")
+                .format(new java.util.Date(c.timestamp))
+                + "</html>");
+        header.setFont(new Font("Segoe UI", Font.PLAIN, 11));
+
+        JTextArea textArea = new JTextArea(c.text);
+        textArea.setEditable(false);
+        textArea.setLineWrap(true);
+        textArea.setWrapStyleWord(true);
+        textArea.setBackground(card.getBackground());
+        textArea.setFont(new Font("Segoe UI", Font.PLAIN, 12));
+
+        JButton resolveBtn = new JButton(c.resolved ? "Resolved ✓" : "Resolve");
+        resolveBtn.setFont(new Font("Segoe UI", Font.PLAIN, 11));
+        resolveBtn.setFocusable(false);
+        resolveBtn.addActionListener(e -> client.sendResolveComment(c.id));
+
+        JPanel bottom = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
+        bottom.setBackground(card.getBackground());
+        bottom.add(resolveBtn);
+
+        card.add(header,   BorderLayout.NORTH);
+        card.add(textArea, BorderLayout.CENTER);
+        card.add(bottom,   BorderLayout.SOUTH);
+        return card;
     }
 
     private void updateRemoteCursorDisplay() {
@@ -605,6 +769,7 @@ public class EditorUI {
 
         // 5. Put the cursor back where it belongs safely
         textPane.setCaretPosition(Math.min(newCursorPosition, styledDoc.getLength()));
+        drawCommentHighlights();
     }
     private void shiftRemoteCursors(int atIndex, int delta) {
         for (Map.Entry<String, Integer> entry : remoteCursors.entrySet()) {
@@ -647,7 +812,7 @@ public class EditorUI {
             }
         }
     }
-    private void onImport() {
+    /*private void onImport() {
         JFileChooser chooser = new JFileChooser();
         chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("Text files (*.txt)", "txt"));
         if (chooser.showOpenDialog(frame) != JFileChooser.APPROVE_OPTION) return;
@@ -667,6 +832,73 @@ public class EditorUI {
         }
         renderDocument(doc.RenderDocument().length());
         drawRemoteCursors();
+    }*/
+
+    private void onImport() {
+        JFileChooser chooser = new JFileChooser();
+        chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("Text files (*.txt)", "txt"));
+        if (chooser.showOpenDialog(frame) != JFileChooser.APPROVE_OPTION) return;
+
+        String content;
+        try {
+            content = java.nio.file.Files.readString(chooser.getSelectedFile().toPath());
+        } catch (java.io.IOException ex) {
+            JOptionPane.showMessageDialog(frame, "Failed to read file: " + ex.getMessage());
+            return;
+        }
+
+        // --- Progress Dialog ---
+        JDialog progressDialog = new JDialog(frame, "Importing...", false);
+        JProgressBar progressBar = new JProgressBar(0, content.length());
+        progressBar.setStringPainted(true);
+        progressBar.setString("0 / " + content.length() + " characters");
+        JLabel progressLabel = new JLabel("Importing file, please wait...", SwingConstants.CENTER);
+        progressLabel.setBorder(BorderFactory.createEmptyBorder(10, 10, 5, 10));
+
+        JPanel progressPanel = new JPanel(new BorderLayout(5, 5));
+        progressPanel.setBorder(BorderFactory.createEmptyBorder(10, 15, 15, 15));
+        progressPanel.add(progressLabel, BorderLayout.NORTH);
+        progressPanel.add(progressBar, BorderLayout.CENTER);
+
+        progressDialog.add(progressPanel);
+        progressDialog.setSize(350, 100);
+        progressDialog.setLocationRelativeTo(frame);
+        progressDialog.setDefaultCloseOperation(JDialog.DO_NOTHING_ON_CLOSE);
+        progressDialog.setVisible(true);
+
+        // --- SwingWorker does the heavy lifting off the EDT ---
+        final String finalContent = content;
+        SwingWorker<Void, Integer> worker = new SwingWorker<>() {
+            @Override
+            protected Void doInBackground() {
+                int startIndex = doc.RenderDocument().length();
+                for (int i = 0; i < finalContent.length(); i++) {
+                    CharNode inserted = doc.LocalInsert(finalContent.charAt(i), startIndex + i);
+                    if (inserted != null) client.sendInsertChar(inserted);
+                    publish(i + 1); // report progress
+                }
+                return null;
+            }
+
+            @Override
+            protected void process(java.util.List<Integer> chunks) {
+                int latest = chunks.get(chunks.size() - 1);
+                progressBar.setValue(latest);
+                progressBar.setString(latest + " / " + finalContent.length() + " characters");
+            }
+
+            @Override
+            protected void done() {
+                progressDialog.dispose();
+                renderDocument(doc.RenderDocument().length());
+                drawRemoteCursors();
+                JOptionPane.showMessageDialog(frame,
+                        "Import complete! " + finalContent.length() + " characters added.",
+                        "Done", JOptionPane.INFORMATION_MESSAGE);
+            }
+        };
+
+        worker.execute();
     }
 
     private void onExport() {
@@ -694,6 +926,46 @@ public class EditorUI {
         String crdtJson = CrdtSerializer.toJson(crdt);
         client.sendSaveDoc(crdtJson);
         JOptionPane.showMessageDialog(frame, "Document saved successfully.");
+    }
+
+    private void drawCommentHighlights() {
+        for (Object tag : commentHighlights.values()) highlighter.removeHighlight(tag);
+        commentHighlights.clear();
+        if (commentsListPanel != null) commentsListPanel.removeAll();
+
+        List<CharNode> visible = doc.GetVisibleNodes();
+
+        for (Comment c : activeComments.values()) {
+            int startIdx = -1, endIdx = -1;
+            for (int i = 0; i < visible.size(); i++) {
+                CharNode n = visible.get(i);
+                if (n.getID().getUserID() == c.startCharUser
+                        && n.getID().getClock() == c.startCharClock) startIdx = i;
+                if (n.getID().getUserID() == c.endCharUser
+                        && n.getID().getClock() == c.endCharClock)   endIdx = i + 1;
+            }
+
+            if (startIdx != -1 && endIdx != -1 && endIdx > startIdx) {
+                try {
+                    Color color = c.resolved
+                            ? new Color(220, 220, 220, 120)
+                            : new Color(255, 255, 0, 150);
+                    Object tag = highlighter.addHighlight(startIdx, endIdx,
+                            new DefaultHighlighter.DefaultHighlightPainter(color));
+                    commentHighlights.put(c.id, tag);
+                } catch (BadLocationException ignored) {}
+            }
+
+            if (commentsListPanel != null) {
+                commentsListPanel.add(buildCommentCard(c));
+                commentsListPanel.add(Box.createVerticalStrut(5));
+            }
+        }
+
+        if (commentsListPanel != null) {
+            commentsListPanel.revalidate();
+            commentsListPanel.repaint();
+        }
     }
 
 }
