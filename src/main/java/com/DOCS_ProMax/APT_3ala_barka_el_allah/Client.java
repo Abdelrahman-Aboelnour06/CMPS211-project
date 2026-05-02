@@ -123,6 +123,18 @@ public class Client extends WebSocketClient {
                 }
             }
 
+            case "UNDELETE_CHAR" -> {
+                CharID targetID = new CharID(op.charUser, op.charClock);
+                BlockNode block = localDoc.getBlock(activeBlockID);
+
+                if (block != null && block.getContent() != null) {
+                    CharNode node = block.getContent().getNode(targetID);
+                    if (node != null) {
+                        node.SetDeleted(false);
+                    }
+                }
+            }
+
             case "FORMAT_CHAR" -> {
                 CharID targetID = new CharID(op.charUser, op.charClock);
                 BlockNode block = localDoc.getBlock(activeBlockID);
@@ -376,4 +388,7 @@ public void sendAddComment(String text, CharNode startNode, CharNode endNode) {
         op.commentId   = commentId;
         send(op.toJson());
     }
+
+
+
 }

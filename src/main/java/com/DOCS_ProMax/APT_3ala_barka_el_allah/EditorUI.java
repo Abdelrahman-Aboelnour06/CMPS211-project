@@ -15,6 +15,8 @@ import java.awt.Font;
 import javax.swing.text.*;
 import java.awt.Color;
 import java.util.Map;
+import java.awt.datatransfer.DataFlavor;
+import java.awt.datatransfer.StringSelection;
 
 public class EditorUI {
 
@@ -23,6 +25,7 @@ public class EditorUI {
     private JTextPane textPane;
     private String username;
     private String sessionCode;
+    private int pendingUndoRedoCount = 0;
     //private DummySessionService sessionService;
     private Client client;
     private DefaultListModel<String> usersListModel;
@@ -95,8 +98,15 @@ public class EditorUI {
                         drawRemoteCursors();
                     }*/
 
-                    case "INSERT_CHAR", "DELETE_CHAR", "FORMAT_CHAR" -> {
-                        renderDocument(textPane.getCaretPosition());
+                    case "INSERT_CHAR", "DELETE_CHAR", "UNDELETE_CHAR","FORMAT_CHAR" -> {
+
+
+                        int caret = textPane.getCaretPosition();
+
+                        if ("UNDELETE_CHAR".equals(op.type)) {
+                            caret += 1; // redo insert → move right
+                        }
+                        renderDocument(caret);
                         drawRemoteCursors();
                     }
 
@@ -213,7 +223,11 @@ public class EditorUI {
         // ... use the username for the Window Title ...
         //frame = new JFrame("Collaborative Editor - " + username + " (" + sessionCode + ")");
         //frame = new JFrame(documentName + " — " + username + " (" + sessionCode + ")");
-        frame = new JFrame("📄 " + documentName + "  |  " + username + "  —  " + sessionCode);
+
+        frame = new JFrame(
+                "📄 " + documentName + "  |  " + username +
+                        (client.isEditor() ? "  —  EDITOR" : "  —  VIEWER [READ ONLY]")
+        );
 
         // --- SETUP THE WINDOW ---
         //frame = new JFrame("Collaborative Text Editor");
@@ -233,6 +247,8 @@ public class EditorUI {
         // Create the buttons
         JButton boldBtn = new JButton("Bold");
         JButton italicBtn = new JButton("Italic");
+        JButton undoBtn = new JButton("Undo");
+        JButton redoBtn = new JButton("Redo");
 
         // 1. Create a bigger, clearer font for the buttons
         Font buttonFont = new Font("Segoe UI", Font.BOLD, 14);
@@ -248,6 +264,15 @@ public class EditorUI {
         // so that don't take control of the cursor
         boldBtn.setFocusable(false);
         italicBtn.setFocusable(false);
+
+        undoBtn.setFocusable(false);
+        redoBtn.setFocusable(false);
+
+        undoBtn.setFont(buttonFont);
+        redoBtn.setFont(buttonFont);
+
+        undoBtn.setMargin(new Insets(10, 25, 10, 25));
+        redoBtn.setMargin(new Insets(10, 25, 10, 25));
 
         // --- BUTTON CLICK LOGIC ---
         // --- BUTTON CLICK LOGIC ---
@@ -288,23 +313,56 @@ public class EditorUI {
             }
         });
 
+        undoBtn.addActionListener(e -> {
+            if (client.isEditor()) {
+
+                client.sendUndo();
+                textPane.requestFocusInWindow();
+            }
+        });
+
+        redoBtn.addActionListener(e -> {
+            if (client.isEditor()) {
+                client.sendRedo();
+                textPane.requestFocusInWindow();
+            }
+        });
+
         // Add the buttons to the toolbar
-        toolBar.add(boldBtn);
-        toolBar.add(italicBtn);
+        if (client.isEditor()) {
+            toolBar.add(boldBtn);
+            toolBar.add(italicBtn);
+            toolBar.add(undoBtn);
+            toolBar.add(redoBtn);
+        }
 
         // ADD after toolBar.add(italicBtn);
-        JLabel codeLabel = new JLabel("  Session: " + sessionCode);
-        codeLabel.setFont(new Font("Segoe UI", Font.BOLD, 13));
-        codeLabel.setForeground(new Color(0, 100, 180));
+        JLabel editorCodeLabel = new JLabel("  Editor Code: " + client.getEditorCode());
+        editorCodeLabel.setFont(new Font("Segoe UI", Font.BOLD, 13));
+        editorCodeLabel.setForeground(new Color(0, 100, 180));
 
-        JButton copyBtn = new JButton("Copy Code");
-        copyBtn.setFocusable(false);
-        copyBtn.addActionListener(ev -> {
+        JButton copyEditorBtn = new JButton("Copy Editor Code");
+        copyEditorBtn.setFocusable(false);
+        copyEditorBtn.addActionListener(ev -> {
             java.awt.Toolkit.getDefaultToolkit()
                     .getSystemClipboard()
-                    .setContents(new java.awt.datatransfer.StringSelection(sessionCode), null);
-            copyBtn.setText("Copied!");
-            new javax.swing.Timer(1500, t -> copyBtn.setText("Copy Code")).start();
+                    .setContents(new java.awt.datatransfer.StringSelection(client.getEditorCode()), null);
+            copyEditorBtn.setText("Copied!");
+            new javax.swing.Timer(1500, t -> copyEditorBtn.setText("Copy Editor Code")).start();
+        });
+
+        JLabel viewerCodeLabel = new JLabel("  Viewer Code: " + client.getViewerCode());
+        viewerCodeLabel.setFont(new Font("Segoe UI", Font.BOLD, 13));
+        viewerCodeLabel.setForeground(new Color(120, 80, 180));
+
+        JButton copyViewerBtn = new JButton("Copy Viewer Code");
+        copyViewerBtn.setFocusable(false);
+        copyViewerBtn.addActionListener(ev -> {
+            java.awt.Toolkit.getDefaultToolkit()
+                    .getSystemClipboard()
+                    .setContents(new java.awt.datatransfer.StringSelection(client.getViewerCode()), null);
+            copyViewerBtn.setText("Copied!");
+            new javax.swing.Timer(1500, t -> copyViewerBtn.setText("Copy Viewer Code")).start();
         });
 
         /*toolBar.addSeparator();
@@ -330,12 +388,23 @@ public class EditorUI {
         saveBtn.addActionListener(e -> onSave());
 
         toolBar.addSeparator();
-        toolBar.add(importBtn);
-        toolBar.add(exportBtn);
-        toolBar.add(saveBtn);
+        if (client.isEditor()) {
+            toolBar.add(importBtn);
+            toolBar.add(exportBtn);
+            toolBar.add(saveBtn);
+        }
         toolBar.addSeparator();
-        toolBar.add(codeLabel);
-        toolBar.add(copyBtn);
+
+        //Codes
+        if (client.isEditor()) {
+            toolBar.add(editorCodeLabel);
+            toolBar.add(copyEditorBtn);
+            toolBar.add(viewerCodeLabel);
+            toolBar.add(copyViewerBtn);
+        } else {
+            toolBar.add(viewerCodeLabel);
+            toolBar.add(copyViewerBtn);
+        }
 
 
         // Add the toolbar to the TOP of the window
@@ -368,6 +437,7 @@ public class EditorUI {
 
         // --- SETUP THE TEXT AREA ---
         textPane = new JTextPane();
+        textPane.setEditable(client.isEditor());
 
         textPane.addCaretListener(e -> {
             if (client != null) {
@@ -432,6 +502,51 @@ public class EditorUI {
 
             @Override
             public void keyPressed(KeyEvent e) {
+                // COPY
+                if (e.isControlDown() && e.getKeyCode() == KeyEvent.VK_C) {
+                    e.consume();
+                    handleCopy();
+                    return;
+                }
+
+                // SELECT ALL
+                if (e.isControlDown() && e.getKeyCode() == KeyEvent.VK_A) {
+                    e.consume();
+                    textPane.requestFocusInWindow();
+                    textPane.selectAll();
+                    return;
+                }
+
+
+
+                if (!client.isEditor()) return;
+
+                // PASTE
+                if (e.isControlDown() && e.getKeyCode() == KeyEvent.VK_V) {
+                    e.consume();
+                    handlePaste();
+                    return;
+                }
+
+                // CUT
+                if (e.isControlDown() && e.getKeyCode() == KeyEvent.VK_X) {
+                    e.consume();
+                    handleCut();
+                    return;
+                }
+
+                // UNDO
+                if (e.isControlDown() && e.getKeyCode() == KeyEvent.VK_Z) {
+                    e.consume();
+                    client.sendUndo();
+                    return;
+                }
+                //REDO
+                if (e.isControlDown() && e.getKeyCode() == KeyEvent.VK_Y) {
+                    e.consume();
+                    client.sendRedo();
+                    return;
+                }
                 // 1. Handle Backspace
                 if (e.getKeyCode() == KeyEvent.VK_BACK_SPACE) {
                     e.consume();
@@ -458,7 +573,7 @@ public class EditorUI {
                     // Explicitly insert exactly one newline character
                     CharNode inserted = doc.LocalInsert('\n', safeIndex);   // returns node
                     if (inserted != null) client.sendInsertChar(inserted);  // ADD THIS LINE
-                    shiftRemoteCursors(cursorPosition - 1, -1);
+                    shiftRemoteCursors(safeIndex, +1);
                     renderDocument(safeIndex + 1);
                     drawRemoteCursors();
                 }
@@ -466,11 +581,18 @@ public class EditorUI {
 
             @Override
             public void keyTyped(KeyEvent e) {
+                if (!client.isEditor()) return;
                 e.consume();
                 char typedChar = e.getKeyChar();
 
-                // Ignore backspace, newlines, and Windows carriage returns here!
-                if (typedChar == '\b' || typedChar == '\n' || typedChar == '\r') return;
+                /* Ignore backspace, newlines, and Windows carriage returns here!
+                if (typedChar == '\b' || typedChar == '\n' || typedChar == '\r') return;*/
+
+                if (e.isControlDown() || Character.isISOControl(typedChar)) {
+                    e.consume();
+                    return;
+                }
+
 
                 int cursorPosition = textPane.getCaretPosition();
 
@@ -567,8 +689,8 @@ public class EditorUI {
         for (String user : users) {
             usersListModel.addElement(user);
         }
-        // remove colors for users who left
-        assignedColors.keySet().retainAll(users);
+
+        //assignedColors.keySet().retainAll(users);
         remoteCursors.keySet().removeIf(user -> !users.contains(user));
         updateRemoteCursorDisplay();
         drawRemoteCursors();
@@ -664,12 +786,16 @@ public class EditorUI {
         return colors[index];
     }*/
 
-    private Color getUserColor(String user) {
+    /*private Color getUserColor(String user) {
         if (!assignedColors.containsKey(user)) {
             int index = assignedColors.size() % CURSOR_COLORS.length;
             assignedColors.put(user, CURSOR_COLORS[index]);
         }
         return assignedColors.get(user);
+    }*/
+    private Color getUserColor(String user) {
+        int index = Math.abs(user.toLowerCase().hashCode()) % CURSOR_COLORS.length;
+        return CURSOR_COLORS[index];
     }
 
     /*private void drawRemoteCursors() {
@@ -966,6 +1092,94 @@ public class EditorUI {
             commentsListPanel.revalidate();
             commentsListPanel.repaint();
         }
+    }
+
+    //Copy,paste,cut
+
+    private String cleanClipboardText(String text) {
+        if (text == null) return "";
+
+        text = text.replace("\r\n", "\n");
+        text = text.replace("\r", "\n");
+
+        StringBuilder cleaned = new StringBuilder();
+
+        for (int i = 0; i < text.length(); i++) {
+            char ch = text.charAt(i);
+
+            if (Character.isISOControl(ch) && ch != '\n' && ch != '\t') {
+                continue;
+            }
+
+            cleaned.append(ch);
+        }
+
+        return cleaned.toString();
+    }
+
+    private void handleCopy() {
+        String selectedText = cleanClipboardText(textPane.getSelectedText());
+        if (selectedText == null || selectedText.isEmpty()) return;
+
+        Toolkit.getDefaultToolkit()
+                .getSystemClipboard()
+                .setContents(new StringSelection(selectedText), null);
+    }
+    private void handlePaste() {
+        if (!client.isEditor()) return;
+
+        try {
+            String pastedText = (String) Toolkit.getDefaultToolkit()
+                    .getSystemClipboard()
+                    .getData(DataFlavor.stringFlavor);
+            pastedText = cleanClipboardText(pastedText);
+            if (pastedText.isEmpty()) return;
+
+
+            int cursorPosition = textPane.getCaretPosition();
+            int safeIndex = Math.min(cursorPosition, doc.RenderDocument().length());
+
+            for (int i = 0; i < pastedText.length(); i++) {
+                CharNode inserted = doc.LocalInsert(pastedText.charAt(i), safeIndex + i);
+
+                if (inserted != null) {
+                    doc.InheritFormatting(safeIndex + i);
+                    client.sendInsertChar(inserted);
+                }
+            }
+
+            renderDocument(safeIndex + pastedText.length());
+            drawRemoteCursors();
+
+        } catch (Exception ex) {
+            JOptionPane.showMessageDialog(frame, "Paste failed");
+        }
+    }
+
+    private void handleCut() {
+        if (!client.isEditor()) return;
+
+        int start = textPane.getSelectionStart();
+        int end = textPane.getSelectionEnd();
+
+        if (start == end) return;
+
+        String selectedText = cleanClipboardText(textPane.getSelectedText());
+        if (selectedText == null) return;
+
+        Toolkit.getDefaultToolkit()
+                .getSystemClipboard()
+                .setContents(new StringSelection(selectedText), null);
+
+        for (int i = end - 1; i >= start; i--) {
+            CharNode deleted = doc.LocalDelete(i);
+            if (deleted != null) {
+                client.sendDeleteChar(deleted);
+            }
+        }
+
+        renderDocument(start);
+        drawRemoteCursors();
     }
 
 }

@@ -88,7 +88,7 @@ public class UndoRedoManager {
      * @return the operation to re-apply, or {@code null} if the stack is empty.
      */
     public Operations redo(String username) {
-        Deque<Operations> undoStack = getOrCreate(undoStacks, username);
+        /*Deque<Operations> undoStack = getOrCreate(undoStacks, username);
         Deque<Operations> redoStack = getOrCreate(redoStacks, username);
 
         if (redoStack.isEmpty()) return null;
@@ -100,7 +100,31 @@ public class UndoRedoManager {
         }
 
         // For redo we simply re-apply the ORIGINAL operation (not an inverse)
-        return copyWithUsername(op, username);
+        return copyWithUsername(op, username);*/
+        Deque<Operations> undoStack = getOrCreate(undoStacks, username);
+        Deque<Operations> redoStack = getOrCreate(redoStacks, username);
+
+        if (redoStack.isEmpty()) return null;
+
+        Operations original = redoStack.pop();
+        undoStack.push(original);
+
+        if (undoStack.size() > MAX_STACK_SIZE) {
+            ((ArrayDeque<Operations>) undoStack).pollLast();
+        }
+
+        Operations redo = new Operations();
+        redo.sessionCode = original.sessionCode;
+        redo.username = username;
+
+        if ("INSERT_CHAR".equals(original.type)) {
+            redo.type = "UNDELETE_CHAR";
+            redo.charUser = original.charUser;
+            redo.charClock = original.charClock;
+            return redo;
+        }
+
+        return copyWithUsername(original, username);
     }
 
     // -----------------------------------------------------------------------
