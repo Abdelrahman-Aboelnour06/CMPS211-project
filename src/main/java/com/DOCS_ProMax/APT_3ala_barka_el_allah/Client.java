@@ -1,4 +1,4 @@
-package com.DOCS_ProMax.APT_3ala_barka_el_allah;
+﻿package com.DOCS_ProMax.APT_3ala_barka_el_allah;
 
 import org.java_websocket.client.WebSocketClient;
 import org.java_websocket.handshake.ServerHandshake;
@@ -140,8 +140,12 @@ public class Client extends WebSocketClient {
 
             case "DOC_SAVED"   -> System.out.println("[Client] " + op.payload);
             case "DOC_DELETED" -> System.out.println("[Client] " + op.payload);
+            case "DOC_RENAMED" -> {
+                System.out.println("[Client] Document renamed to: " + op.payload);
+            }
             case "DOCS_LIST"   -> System.out.println("[Client] Documents: " + op.payload);
             case "VERSIONS_LIST" -> System.out.println("[Client] Versions: " + op.payload);
+
 
             case "DOC_LOADED" -> {
                 // A document was loaded or rolled back – the UI layer must re-render

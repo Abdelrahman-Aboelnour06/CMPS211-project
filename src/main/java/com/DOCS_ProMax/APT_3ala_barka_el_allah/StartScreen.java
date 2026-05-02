@@ -48,7 +48,7 @@ public class StartScreen {
         usernameField = new JTextField();
         sessionCodeField = new JTextField();
 
-        JButton createButton = new JButton("Create Session");
+        JButton createButton = new JButton("Create New Document");
         JButton joinButton = new JButton("Join Session");
         JButton myDocsButton = new JButton("My Documents");
 
@@ -200,7 +200,7 @@ public class StartScreen {
             JButton deleteBtn = new JButton("Delete");
             deleteBtn.setForeground(Color.RED);
 
-            openBtn.addActionListener(e -> {
+            /*openBtn.addActionListener(e -> {
                 dialog.dispose();
 
                 client.setMessageListener(op -> SwingUtilities.invokeLater(() -> {
@@ -230,6 +230,44 @@ public class StartScreen {
                 }));
 
                 client.createSession(username);
+            });*/
+
+            openBtn.addActionListener(e -> {
+                dialog.dispose();
+
+                client.setMessageListener(op -> SwingUtilities.invokeLater(() -> {
+                    if ("SESSION_CREATED".equals(op.type)) {
+                        // Load saved CRDT content into the local CRDT
+                        if (op.payload != null && !op.payload.isBlank()) {
+                            CharCRDT crdt = client.getActiveCharCRDT();
+                            if (crdt != null) {
+                                CharCRDT loaded = CrdtSerializer.fromJson(
+                                        op.payload,
+                                        (int)(System.currentTimeMillis() % 100000)
+                                );
+                                for (CharNode node : loaded.getOrderedNodes()) {
+                                    crdt.RemotelyInsertion(
+                                            node.getID(), node.getParentID(), node.getValue()
+                                    );
+                                }
+                            }
+                        }
+                        // Use the ORIGINAL editor code, not a new one
+                        client.setOriginalEditorCode(editorCode);
+                        new EditorUI(username, op.editorCode, client);
+                        frame.dispose();
+
+                    } else if ("ERROR".equals(op.type)) {
+                        statusLabel.setText(op.payload);
+                    }
+                }));
+
+                // Send OPEN_DOC instead of createSession — preserves original codes
+                Operations openOp = new Operations();
+                openOp.type        = "OPEN_DOC";
+                openOp.sessionCode = editorCode;
+                openOp.username    = username;
+                client.send(openOp.toJson());
             });
 
             deleteBtn.addActionListener(e -> {
@@ -247,8 +285,36 @@ public class StartScreen {
                 }
             });
 
+            /*JPanel btns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 5, 0));
+            btns.add(openBtn);
+            btns.add(deleteBtn);*/
+            JButton renameBtn = new JButton("Rename");
+            renameBtn.addActionListener(e -> {
+                String newName = JOptionPane.showInputDialog(dialog,
+                        "New name:", "Rename", JOptionPane.PLAIN_MESSAGE);
+                if (newName != null && !newName.isBlank()) {
+                    Operations renameOp = new Operations();
+                    renameOp.type        = "RENAME_DOC";
+                    renameOp.sessionCode = editorCode;
+                    renameOp.username    = username;
+                    renameOp.payload     = newName.trim();
+                    // Wait for server confirmation BEFORE refreshing the list
+                    client.setMessageListener(op -> SwingUtilities.invokeLater(() -> {
+                        if ("DOC_RENAMED".equals(op.type)) {
+                            dialog.dispose();
+                            handleMyDocuments(); // now the DB has the new name
+                        } else if ("ERROR".equals(op.type)) {
+                            statusLabel.setText(op.payload);
+                        }
+                    }));
+
+                    client.send(renameOp.toJson());
+                }
+            });
+
             JPanel btns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 5, 0));
             btns.add(openBtn);
+            btns.add(renameBtn);
             btns.add(deleteBtn);
 
             row.add(info, BorderLayout.CENTER);

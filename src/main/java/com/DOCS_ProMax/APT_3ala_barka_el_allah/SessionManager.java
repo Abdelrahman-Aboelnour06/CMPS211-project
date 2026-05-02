@@ -279,4 +279,15 @@ public class SessionManager {
         /** Returns true every 10th operation (triggers auto-save). */
         public boolean shouldAutoSave()                 { return opCount % 10 == 0 && opCount > 0; }
     }
+    public Session restoreSession(String editorCode, String viewerCode,
+                                  String username, WebSocketSession conn) {
+        Session session = new Session(editorCode, viewerCode, username, conn);
+        sessions.put(editorCode, session);
+        codeIndex.put(editorCode, session);
+        codeIndex.put(viewerCode, session);
+        clientNames.put(conn, username);
+        clientSessions.put(conn, editorCode);
+        clientRoles.put(conn, "editor");
+        return session;
+    }
 }

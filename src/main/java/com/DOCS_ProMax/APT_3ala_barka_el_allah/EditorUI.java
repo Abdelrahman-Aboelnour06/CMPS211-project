@@ -135,6 +135,18 @@ public class EditorUI {
             renderDocument(0);
             drawRemoteCursors();
         });
+        // Startup poller: replayed INSERT_CHAR ops arrive on the WebSocket thread
+        // concurrently with EditorUI construction on the EDT. Poll every 250 ms for
+        // up to 5 seconds so we catch any ops that land after the first render.
+        javax.swing.Timer startupPoller = new javax.swing.Timer(250, null);
+        int[] pollCount = {0};
+        startupPoller.addActionListener(ev -> {
+            pollCount[0]++;
+            renderDocument(0);
+            drawRemoteCursors();
+            if (pollCount[0] >= 20) startupPoller.stop(); // stop after 5 seconds
+        });
+        startupPoller.start();
         client.requestActiveUsers();
         // ... use the username for the Window Title ...
         frame = new JFrame("Collaborative Editor - " + username + " (" + sessionCode + ")");

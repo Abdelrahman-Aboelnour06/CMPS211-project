@@ -97,4 +97,8 @@ public class DocumentEntity {
 
     public List<String> getVersions()             { return versions; }
     public void         setVersions(List<String> v){ this.versions = v; }
+
+    private String documentName = "Untitled";
+    public String getDocumentName() { return documentName; }
+    public void setDocumentName(String v) { this.documentName = v; }
 }

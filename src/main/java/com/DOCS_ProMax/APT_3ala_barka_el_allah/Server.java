@@ -274,12 +274,24 @@ public class Server extends TextWebSocketHandler {
 
                     // Build a lightweight JSON array of {editorCode, viewerCode, id}
                     StringBuilder sb = new StringBuilder("[");
-                    for (int i = 0; i < docs.size(); i++) {
+                    /*for (int i = 0; i < docs.size(); i++) {
                         DocumentEntity d = docs.get(i);
                         if (i > 0) sb.append(",");
                         sb.append("{\"id\":\"").append(d.getId())
                                 .append("\",\"editorCode\":\"").append(d.getEditorCode())
                                 .append("\",\"viewerCode\":\"").append(d.getViewerCode()).append("\"}");
+                    }*/
+                    for (int i = 0; i < docs.size(); i++) {
+                        DocumentEntity d = docs.get(i);
+                        if (i > 0) sb.append(",");
+                        sb.append("{")
+                                .append("\"id\":\"").append(d.getId()).append("\",")
+                                .append("\"documentName\":\"").append(
+                                        d.getDocumentName() != null ? d.getDocumentName() : "Untitled"
+                                ).append("\",")                                     // ← ADD THIS LINE
+                                .append("\"editorCode\":\"").append(d.getEditorCode()).append("\",")
+                                .append("\"viewerCode\":\"").append(d.getViewerCode()).append("\"")
+                                .append("}");
                     }
                     sb.append("]");
 
@@ -381,6 +393,62 @@ public class Server extends TextWebSocketHandler {
                     notify.payload = rolledBack;
                     broadcastToAll(code, notify.toJson());
                 }
+                case "OPEN_DOC" -> {
+                    if (documentRepository == null) { sendError(session, "Database not configured"); return; }
+                    if (isBlank(op.sessionCode))    { sendError(session, "Session code required"); return; }
+                    if (isBlank(op.username))       { sendError(session, "Username required"); return; }
+
+                    Optional<DocumentEntity> found =
+                            documentRepository.findByEditorCode(op.sessionCode.trim().toUpperCase());
+                    if (found.isEmpty()) { sendError(session, "Document not found"); return; }
+
+                    DocumentEntity doc = found.get();
+                    String eCode = doc.getEditorCode();
+                    String vCode = doc.getViewerCode();
+
+                    // Restore or reuse the in-memory session with the ORIGINAL codes
+                    SessionManager.Session s = sessionManager.getSession(eCode);
+                    if (s == null) {
+                        s = sessionManager.restoreSession(eCode, vCode, op.username.trim(), session);
+                    } else {
+                        sessionManager.joinSession(eCode, session, op.username.trim());
+                    }
+
+                    Operations resp = new Operations();
+                    resp.type        = "SESSION_CREATED";
+                    resp.sessionCode = eCode;
+                    resp.editorCode  = eCode;
+                    resp.viewerCode  = vCode;
+                    resp.payload     = doc.getCrdtJson(); // send content in same response
+                    sendTo(session, resp.toJson());
+                    broadcastActiveUsers(eCode);
+
+                    System.out.println("[Server] Document reopened: " + eCode + " by " + op.username);
+                }
+
+                case "RENAME_DOC" -> {
+                    if (documentRepository == null) { sendError(session, "Database not configured"); return; }
+                    if (isBlank(op.sessionCode) || isBlank(op.payload)) { sendError(session, "Missing fields"); return; }
+                    if (isBlank(op.username)) { sendError(session, "Username required"); return; }
+
+                    Optional<DocumentEntity> found =
+                            documentRepository.findByEditorCode(op.sessionCode.trim().toUpperCase());
+                    if (found.isEmpty()) { sendError(session, "Document not found"); return; }
+                    if (!op.username.trim().equals(found.get().getOwnerUsername())) {
+                        sendError(session, "Only the owner can rename"); return;
+                    }
+
+                    found.get().setDocumentName(op.payload.trim());
+                    documentRepository.save(found.get());
+
+                    Operations resp = new Operations();
+                    resp.type    = "DOC_RENAMED";
+                    resp.payload = op.payload.trim();
+                    sendTo(session, resp.toJson());
+                    System.out.println("[Server] Document renamed to: " + op.payload.trim());
+                }
+
+
 
                 // ==============================================================
                 // UNKNOWN
