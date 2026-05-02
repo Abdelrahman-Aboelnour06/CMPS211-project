@@ -524,7 +524,7 @@ public class Server extends TextWebSocketHandler {
 
                     Operations resp = new Operations();
                     resp.type    = "COMMENTS_LIST";
-                    resp.payload = gson.toJson(found.get().getComments());
+                    resp.payload = found.isPresent() ? gson.toJson(found.get().getComments()) : "[]";
                     sendTo(session, resp.toJson());
                 }
 
