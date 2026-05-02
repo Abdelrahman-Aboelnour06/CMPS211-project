@@ -520,7 +520,7 @@ public class Server extends TextWebSocketHandler {
                     if (code == null) { sendError(session, "Not in a session"); return; }
 
                     Optional<DocumentEntity> found = documentRepository.findByEditorCode(code);
-                    if (found.isEmpty()) { sendError(session, "Document not found"); return; }
+                   // if (found.isEmpty()) { sendError(session, "Document not found"); return; }
 
                     Operations resp = new Operations();
                     resp.type    = "COMMENTS_LIST";
