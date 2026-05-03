@@ -1015,17 +1015,25 @@ public class EditorUI {
     private void drawRemoteCursors() {
         cursorHighlights.values().forEach(highlighter::removeHighlight);
         cursorHighlights.clear();
+
         int length = textPane.getDocument().getLength();
+
         for (Map.Entry<String, Integer> entry : remoteCursors.entrySet()) {
             String user = entry.getKey();
             int pos = Math.max(0, Math.min(entry.getValue(), length));
-            if (length == 0) continue;
+
+            if (length == 0) continue; // Safety check to prevent background errors
+
             try {
                 int p0 = Math.min(pos, length - 1);
                 Object tag = highlighter.addHighlight(p0, p0 + 1, new CursorPainter(getUserColor(user), pos));
                 cursorHighlights.put(user, tag);
             } catch (BadLocationException ignored) {}
         }
+
+        // THE FIX: Force Swing to wipe the text pane clean of any leftover pixel dust!
+        textPane.repaint();
+
     }
 
     private void shiftRemoteCursors(int atIndex, int delta) {
