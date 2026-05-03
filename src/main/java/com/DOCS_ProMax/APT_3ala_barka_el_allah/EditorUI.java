@@ -425,21 +425,29 @@ public class EditorUI {
                     // Count the total newlines now in the active block.
                     // If a block would exceed MAX_LINES_PER_BLOCK lines,
                     // split it at the cursor position and broadcast the split.
+                    // ── BLOCK SPLIT CHECK ─────────────────────────────────
                     BlockID activeBlock = client.getActiveBlockID();
                     if (activeBlock != null) {
                         BlockNode blockNode = client.getLocalDoc().getBlock(activeBlock);
                         if (blockNode != null && blockNode.getLineCount() > MAX_LINES_PER_BLOCK) {
-                            // splitBlockAtCursor returns the newly created second block
-                            BlockNode newBlock = client.getLocalDoc()
-                                    .splitBlockAtCursor(activeBlock, safeIndex + 1);
-                            if (newBlock != null) {
-                                // Broadcast split to all peers
-                                client.sendSplitBlock(activeBlock, safeIndex + 1);
-                                // Advance active block to the new one so typing continues there
-                                client.setActiveBlockID(newBlock.getId());
+
+                            // THE FIX: Find the local index of the newline we just inserted inside THIS block!
+                            int localIndex = blockNode.getChars().indexOf(inserted);
+
+                            if (localIndex != -1) {
+                                // Split exactly after the newline
+                                BlockNode newBlock = client.getLocalDoc()
+                                        .splitBlockAtCursor(activeBlock, localIndex + 1);
+
+                                if (newBlock != null) {
+                                    client.sendSplitBlock(activeBlock, localIndex + 1);
+                                    client.setActiveBlockID(newBlock.getId());
+                                }
                             }
                         }
                     }
+                    // ── END BLOCK SPLIT CHECK ─────────────────────────────
+
                     // ── END BLOCK SPLIT CHECK ─────────────────────────────
 
                     renderDocument(safeIndex + 1);

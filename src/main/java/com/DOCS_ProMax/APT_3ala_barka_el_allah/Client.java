@@ -109,17 +109,25 @@ public class Client extends WebSocketClient {
             // Character operations
             // ------------------------------------------------------------------
 
+            // ── BLOCK SPLIT CHECK ─────────────────────────────────
+            // ------------------------------------------------------------------
+            // Character operations
+            // ------------------------------------------------------------------
+
             case "INSERT_CHAR" -> {
                 CharID incomingID = new CharID(op.charUser, op.charClock);
                 CharID parentID   = new CharID(op.parentUser, op.parentClock);
                 sharedClock.advanceTo(op.charClock);
-                BlockNode block = localDoc.getBlock(activeBlockID);
-                if (block != null && block.getContent() != null) {
-                    CharNode inserted = block.getContent()
-                            .RemotelyInsertion(incomingID, parentID, op.value);
-                    if (inserted != null) {
-                        inserted.setBold(op.isBold);
-                        inserted.setItalic(op.isItalic);
+
+                // THE FIX: Search all blocks to find where the parent letter lives
+                for (BlockNode block : localDoc.getOrderedNodes()) {
+                    if (block.getContent() != null && block.getContent().getNode(parentID) != null) {
+                        CharNode inserted = block.getContent().RemotelyInsertion(incomingID, parentID, op.value);
+                        if (inserted != null) {
+                            inserted.setBold(op.isBold);
+                            inserted.setItalic(op.isItalic);
+                        }
+                        break;
                     }
                 }
             }
@@ -127,34 +135,46 @@ public class Client extends WebSocketClient {
             case "DELETE_CHAR" -> {
                 CharID targetID = new CharID(op.charUser, op.charClock);
                 sharedClock.advanceTo(op.charClock);
-                BlockNode block = localDoc.getBlock(activeBlockID);
-                if (block != null && block.getContent() != null) {
-                    CharNode node = block.getContent().getNode(targetID);
-                    if (node != null) node.SetDeleted(true);
+
+                // THE FIX: Search all blocks for the character to delete
+                for (BlockNode block : localDoc.getOrderedNodes()) {
+                    if (block.getContent() != null) {
+                        CharNode node = block.getContent().getNode(targetID);
+                        if (node != null) {
+                            node.SetDeleted(true);
+                            break;
+                        }
+                    }
                 }
             }
 
             case "UNDELETE_CHAR" -> {
                 CharID targetID = new CharID(op.charUser, op.charClock);
-                BlockNode block = localDoc.getBlock(activeBlockID);
-                if (block != null && block.getContent() != null) {
-                    CharNode node = block.getContent().getNode(targetID);
-                    if (node != null) node.SetDeleted(false);
+                for (BlockNode block : localDoc.getOrderedNodes()) {
+                    if (block.getContent() != null) {
+                        CharNode node = block.getContent().getNode(targetID);
+                        if (node != null) {
+                            node.SetDeleted(false);
+                            break;
+                        }
+                    }
                 }
             }
 
             case "FORMAT_CHAR" -> {
                 CharID targetID = new CharID(op.charUser, op.charClock);
-                BlockNode block = localDoc.getBlock(activeBlockID);
-                if (block != null) {
-                    CharNode node = block.getContent().getNode(targetID);
-                    if (node != null) {
-                        node.setBold(op.isBold);
-                        node.setItalic(op.isItalic);
+                for (BlockNode block : localDoc.getOrderedNodes()) {
+                    if (block.getContent() != null) {
+                        CharNode node = block.getContent().getNode(targetID);
+                        if (node != null) {
+                            node.setBold(op.isBold);
+                            node.setItalic(op.isItalic);
+                            break;
+                        }
                     }
                 }
             }
-
+            // ── END BLOCK SPLIT CHECK ─────────────────────────────
             // ------------------------------------------------------------------
             // Block operations
             // ------------------------------------------------------------------
