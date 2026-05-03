@@ -80,33 +80,34 @@ public class CrdtSerializer {
     // -----------------------------------------------------------------------
     // Deserialise
     // -----------------------------------------------------------------------
-    // -----------------------------------------------------------------------
-    // Deserialise
-    // -----------------------------------------------------------------------
+    /**
+     * Reconstructs a {@link CharCRDT} from a JSON string that was previously
+     * produced by {@link #toJson(CharCRDT)}.
+     *
+     * @param json    The stored JSON blob.
+     * @param userId  The userID to assign to the reconstructed CRDT's local clock.
+     */
     public static CharCRDT fromJson(String json, int userId) {
         if (json == null || json.isBlank()) return new CharCRDT(userId);
-        Type listType = new TypeToken<List<NodeDto>>() {
-        }.getType();
+
+        Type listType = new TypeToken<List<NodeDto>>() {}.getType();
         List<NodeDto> dtos = GSON.fromJson(json, listType);
 
         CharCRDT crdt = new CharCRDT(userId);
-        CharID lastID = crdt.rootID;
 
         for (NodeDto dto : dtos) {
             CharID incomingID = new CharID(dto.userID, dto.clock);
+            CharID parentID   = new CharID(dto.parentUser, dto.parentClock);
 
-            // THE FIX: Ignore the old, potentially deleted parent IDs.
-            // The JSON is already in visual order, so we just chain them sequentially!
-            CharNode node = crdt.RemotelyInsertion(incomingID, lastID, dto.value);
+            CharNode node = crdt.RemotelyInsertion(incomingID, parentID, dto.value);
 
             if (node != null) {
                 node.setBold(dto.bold);
                 node.setItalic(dto.italic);
                 if (dto.deleted) node.SetDeleted(true);
-
-                lastID = incomingID; // Chain the next letter to this one
             }
         }
+
         return crdt;
     }
 }
