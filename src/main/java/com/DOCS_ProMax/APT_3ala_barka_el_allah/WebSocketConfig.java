@@ -1,10 +1,12 @@
 package com.DOCS_ProMax.APT_3ala_barka_el_allah;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.socket.config.annotation.EnableWebSocket;
 import org.springframework.web.socket.config.annotation.WebSocketConfigurer;
 import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry;
+import org.springframework.web.socket.server.standard.ServletServerContainerFactoryBean;
 
 @Configuration
 @EnableWebSocket
@@ -16,5 +18,17 @@ public class WebSocketConfig implements WebSocketConfigurer {
     @Override
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
         registry.addHandler(server, "/collab").setAllowedOrigins("*");
+    }
+
+    // THE FIX: Increase the WebSocket payload limit so big JSON files don't crash the connection!
+    @Bean
+    public ServletServerContainerFactoryBean createWebSocketContainer() {
+        ServletServerContainerFactoryBean container = new ServletServerContainerFactoryBean();
+
+        // Expand the limit to 5 Megabytes (Default is only 8 Kilobytes!)
+        container.setMaxTextMessageBufferSize(10 * 1024 * 1024);
+        container.setMaxBinaryMessageBufferSize(10 * 1024 * 1024);
+
+        return container;
     }
 }
