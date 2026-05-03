@@ -5,7 +5,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-public class BlockCRDT {
+public class  BlockCRDT {
 
     private static final int MAX_LINES = 10;
     private static final int MIN_LINES = 2;

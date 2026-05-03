@@ -13,23 +13,15 @@ import java.util.Optional;
 
 /**
  * Central WebSocket message handler.
- *
- * Updated for Phase 3:
- *   Member 1 – SAVE_DOC, LOAD_DOC, LIST_DOCS, DELETE_DOC, auto-save,
- *               GET_VERSIONS, ROLLBACK_VERSION
- *   Member 2 – viewer permission enforcement, UNDO, REDO, RECONNECT
+ * Full Phase 3 implementation including block operations networking,
+ * session-level undo/redo (other users' changes), and all spec requirements.
  */
 @Component
 public class Server extends TextWebSocketHandler {
 
-    // -----------------------------------------------------------------------
-    // Dependencies
-    // -----------------------------------------------------------------------
+    private final SessionManager   sessionManager  = new SessionManager();
+    private final UndoRedoManager  undoRedoManager = new UndoRedoManager();
 
-    private final SessionManager    sessionManager   = new SessionManager();
-    private final UndoRedoManager   undoRedoManager  = new UndoRedoManager();
-
-    /** Spring injects the repository only when MongoDB is on the classpath. */
     @Autowired(required = false)
     private DocumentRepository documentRepository;
 
@@ -48,7 +40,7 @@ public class Server extends TextWebSocketHandler {
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
         System.out.println("[Server] Client disconnected: " + session.getId());
         String code = sessionManager.getSessionCode(session);
-        sessionManager.removeClient(session);    // moves to disconnectedClients map
+        sessionManager.removeClient(session);
         if (code != null) broadcastActiveUsers(code);
     }
 
@@ -76,7 +68,7 @@ public class Server extends TextWebSocketHandler {
 
                     Operations resp = new Operations();
                     resp.type        = "SESSION_CREATED";
-                    resp.sessionCode = s.getEditorCode();   // primary code
+                    resp.sessionCode = s.getEditorCode();
                     resp.editorCode  = s.getEditorCode();
                     resp.viewerCode  = s.getViewerCode();
                     sendTo(session, resp.toJson());
@@ -104,7 +96,6 @@ public class Server extends TextWebSocketHandler {
                         resp.role        = sessionManager.getRole(session);
                         sendTo(session, resp.toJson());
 
-                        // Replay past operations so the joiner sees the current state
                         for (String pastOp : s.getOperationLog()) sendTo(session, pastOp);
 
                         broadcastActiveUsers(s.getEditorCode());
@@ -115,7 +106,7 @@ public class Server extends TextWebSocketHandler {
                 }
 
                 // ==============================================================
-                // RECONNECTION  (Member 2 Bonus)
+                // RECONNECTION
                 // ==============================================================
 
                 case "RECONNECT" -> {
@@ -129,7 +120,6 @@ public class Server extends TextWebSocketHandler {
                         return;
                     }
 
-                    // Re-join the session with the stored role
                     SessionManager.Session s =
                             sessionManager.joinSession(dc.sessionEditorCode, session, op.username.trim());
 
@@ -139,9 +129,7 @@ public class Server extends TextWebSocketHandler {
                         return;
                     }
 
-                    // Send all missed ops
                     for (String missedOp : dc.missedOps) sendTo(session, missedOp);
-
                     sessionManager.clearDisconnectedClient(op.username.trim());
 
                     Operations resp = new Operations();
@@ -155,17 +143,8 @@ public class Server extends TextWebSocketHandler {
                 }
 
                 // ==============================================================
-                // CRDT OPERATIONS  (editor-only for mutating ops)
+                // CHARACTER CRDT OPERATIONS
                 // ==============================================================
-
-                /*case "INSERT_CHAR", "DELETE_CHAR" -> {
-                    // Member 2: reject if viewer
-                    if (!sessionManager.isEditor(session)) {
-                        sendError(session, "Viewers cannot edit the document");
-                        return;
-                    }
-                    relayAndLog(session, message.getPayload(), op, true);
-                }*/
 
                 case "INSERT_CHAR", "DELETE_CHAR" -> {
                     if (!sessionManager.isEditor(session)) {
@@ -177,7 +156,8 @@ public class Server extends TextWebSocketHandler {
                         Optional<DocumentEntity> found = documentRepository.findByEditorCode(code);
                         found.ifPresent(d -> {
                             boolean changed = d.getComments()
-                                    .removeIf(c -> c.startCharUser == op.charUser && c.startCharClock == op.charClock);
+                                    .removeIf(c -> c.startCharUser == op.charUser
+                                            && c.startCharClock == op.charClock);
                             if (changed) {
                                 documentRepository.save(d);
                                 Operations notify = new Operations();
@@ -190,54 +170,80 @@ public class Server extends TextWebSocketHandler {
                     relayAndLog(session, message.getPayload(), op, true);
                 }
 
-
+                case "UNDELETE_CHAR" -> {
+                    if (!sessionManager.isEditor(session)) {
+                        sendError(session, "Viewers cannot edit the document"); return;
+                    }
+                    relayAndLog(session, message.getPayload(), op, false);
+                }
 
                 case "FORMAT_CHAR" -> {
                     if (!sessionManager.isEditor(session)) {
-                        sendError(session, "Viewers cannot format the document");
-                        return;
+                        sendError(session, "Viewers cannot format the document"); return;
                     }
                     relayAndLog(session, message.getPayload(), op, true);
                 }
 
                 // ==============================================================
-                // UNDO / REDO  (Member 2)
+                // BLOCK CRDT OPERATIONS  ← NEW
+                // ==============================================================
+
+                case "INSERT_BLOCK", "DELETE_BLOCK", "SPLIT_BLOCK", "MERGE_BLOCK",
+                     "MOVE_BLOCK", "COPY_BLOCK" -> {
+                    if (!sessionManager.isEditor(session)) {
+                        sendError(session, "Viewers cannot modify blocks"); return;
+                    }
+                    relayAndLog(session, message.getPayload(), op, true);
+                    System.out.println("[Server] Block op " + op.type
+                            + " relayed in session " + sessionManager.getSessionCode(session));
+                }
+
+                // ==============================================================
+                // UNDO / REDO  (own changes AND other users' changes)
                 // ==============================================================
 
                 case "UNDO" -> {
                     if (!sessionManager.isEditor(session)) {
-                        sendError(session, "Viewers cannot undo");
-                        return;
+                        sendError(session, "Viewers cannot undo"); return;
                     }
-                    String username = op.username;
-                    Operations inverse = undoRedoManager.undo(username);
+                    String editorCode = sessionManager.getSessionCode(session);
+
+                    // Try own stack first, then session stack
+                    Operations inverse = undoRedoManager.undo(op.username);
+                    if (inverse == null) {
+                        inverse = undoRedoManager.undoFromSession(editorCode, op.username);
+                    }
                     if (inverse == null) { sendError(session, "Nothing to undo"); return; }
 
-                    // Apply and broadcast inverse
-                    broadcastToAll(sessionManager.getSessionCode(session), inverse.toJson());
+                    inverse.sessionCode = editorCode;
+                    broadcastToAll(editorCode, inverse.toJson());
                 }
 
                 case "REDO" -> {
                     if (!sessionManager.isEditor(session)) {
-                        sendError(session, "Viewers cannot redo");
-                        return;
+                        sendError(session, "Viewers cannot redo"); return;
                     }
-                    String username = op.username;
-                    Operations reapplied = undoRedoManager.redo(username);
+                    String editorCode = sessionManager.getSessionCode(session);
+
+                    Operations reapplied = undoRedoManager.redo(op.username);
+                    if (reapplied == null) {
+                        reapplied = undoRedoManager.redoFromSession(editorCode, op.username);
+                    }
                     if (reapplied == null) { sendError(session, "Nothing to redo"); return; }
 
-                    broadcastToAll(sessionManager.getSessionCode(session), reapplied.toJson());
+                    reapplied.sessionCode = editorCode;
+                    broadcastToAll(editorCode, reapplied.toJson());
                 }
 
                 // ==============================================================
-                // CURSOR  (viewers can still broadcast cursor position)
+                // CURSOR
                 // ==============================================================
 
                 case "CURSOR" -> {
                     String code = sessionManager.getSessionCode(session);
                     List<WebSocketSession> others = sessionManager.getOtherClients(session);
                     String payload = message.getPayload();
-                    sessionManager.bufferMissedOp(code, payload);   // Reconnection bonus
+                    sessionManager.bufferMissedOp(code, payload);
                     for (WebSocketSession other : others) sendTo(other, payload);
                 }
 
@@ -252,7 +258,7 @@ public class Server extends TextWebSocketHandler {
                 }
 
                 // ==============================================================
-                // DATABASE PERSISTENCE  (Member 1)
+                // DATABASE PERSISTENCE
                 // ==============================================================
 
                 case "SAVE_DOC" -> {
@@ -262,11 +268,11 @@ public class Server extends TextWebSocketHandler {
                     String code = sessionManager.getSessionCode(session);
                     if (code == null) { sendError(session, "Not in a session"); return; }
 
-                    // If client specified an original editor code (reopened from DB), use that instead
-                    String saveCode = (op.originalEditorCode != null && !op.originalEditorCode.isBlank())
-                            ? op.originalEditorCode
-                            : code;
-                    saveDocument(saveCode, op.ownerUsername, op.payload);
+                    String saveCode = (!isBlank(op.originalEditorCode))
+                            ? op.originalEditorCode : code;
+
+                    String docName = (!isBlank(op.documentName)) ? op.documentName : "Untitled";
+                    saveDocument(saveCode, op.ownerUsername, op.payload, docName);
 
                     Operations resp = new Operations();
                     resp.type    = "DOC_SAVED";
@@ -279,7 +285,8 @@ public class Server extends TextWebSocketHandler {
                     if (isBlank(op.sessionCode))  { sendError(session, "Session code required"); return; }
 
                     Optional<DocumentEntity> found =
-                            documentRepository.findByEditorCodeOrViewerCode(op.sessionCode.trim().toUpperCase());
+                            documentRepository.findByEditorCodeOrViewerCode(
+                                    op.sessionCode.trim().toUpperCase());
 
                     if (found.isEmpty()) { sendError(session, "Document not found"); return; }
 
@@ -297,23 +304,15 @@ public class Server extends TextWebSocketHandler {
                     List<DocumentEntity> docs =
                             documentRepository.findAllByOwnerUsername(op.ownerUsername.trim());
 
-                    // Build a lightweight JSON array of {editorCode, viewerCode, id}
                     StringBuilder sb = new StringBuilder("[");
-                    /*for (int i = 0; i < docs.size(); i++) {
-                        DocumentEntity d = docs.get(i);
-                        if (i > 0) sb.append(",");
-                        sb.append("{\"id\":\"").append(d.getId())
-                                .append("\",\"editorCode\":\"").append(d.getEditorCode())
-                                .append("\",\"viewerCode\":\"").append(d.getViewerCode()).append("\"}");
-                    }*/
                     for (int i = 0; i < docs.size(); i++) {
                         DocumentEntity d = docs.get(i);
                         if (i > 0) sb.append(",");
                         sb.append("{")
                                 .append("\"id\":\"").append(d.getId()).append("\",")
-                                .append("\"documentName\":\"").append(
-                                        d.getDocumentName() != null ? d.getDocumentName() : "Untitled"
-                                ).append("\",")                                     // ← ADD THIS LINE
+                                .append("\"documentName\":\"")
+                                .append(d.getDocumentName() != null ? d.getDocumentName() : "Untitled")
+                                .append("\",")
                                 .append("\"editorCode\":\"").append(d.getEditorCode()).append("\",")
                                 .append("\"viewerCode\":\"").append(d.getViewerCode()).append("\"")
                                 .append("}");
@@ -326,36 +325,17 @@ public class Server extends TextWebSocketHandler {
                     sendTo(session, resp.toJson());
                 }
 
-                /*case "DELETE_DOC" -> {
-                    if (documentRepository == null) { sendError(session, "Database not configured"); return; }
-                    if (!sessionManager.isEditor(session)) { sendError(session, "Only editors can delete"); return; }
-                    if (isBlank(op.sessionCode)) { sendError(session, "Session code required"); return; }
-
-                    Optional<DocumentEntity> found =
-                            documentRepository.findByEditorCode(op.sessionCode.trim().toUpperCase());
-
-                    if (found.isEmpty()) { sendError(session, "Document not found"); return; }
-
-                    documentRepository.delete(found.get());
-
-                    Operations resp = new Operations();
-                    resp.type    = "DOC_DELETED";
-                    resp.payload = "Document deleted";
-                    sendTo(session, resp.toJson());
-                }*/
                 case "DELETE_DOC" -> {
                     if (documentRepository == null) { sendError(session, "Database not configured"); return; }
                     if (isBlank(op.sessionCode)) { sendError(session, "Session code required"); return; }
-                    if (isBlank(op.username)) { sendError(session, "Username required"); return; }
+                    if (isBlank(op.username))    { sendError(session, "Username required"); return; }
 
                     Optional<DocumentEntity> found =
                             documentRepository.findByEditorCode(op.sessionCode.trim().toUpperCase());
 
                     if (found.isEmpty()) { sendError(session, "Document not found"); return; }
-
                     if (!op.username.trim().equals(found.get().getOwnerUsername())) {
-                        sendError(session, "Only the document owner can delete");
-                        return;
+                        sendError(session, "Only the document owner can delete"); return;
                     }
 
                     documentRepository.delete(found.get());
@@ -366,62 +346,10 @@ public class Server extends TextWebSocketHandler {
                     sendTo(session, resp.toJson());
                 }
 
-
-
-                // ==============================================================
-                // VERSION HISTORY  (Member 1 Bonus)
-                // ==============================================================
-
-                case "GET_VERSIONS" -> {
-                    if (documentRepository == null) { sendError(session, "Database not configured"); return; }
-                    if (isBlank(op.sessionCode)) { sendError(session, "Session code required"); return; }
-
-                    Optional<DocumentEntity> found =
-                            documentRepository.findByEditorCodeOrViewerCode(op.sessionCode.trim().toUpperCase());
-
-                    if (found.isEmpty()) { sendError(session, "Document not found"); return; }
-
-                    Operations resp = new Operations();
-                    resp.type    = "VERSIONS_LIST";
-                    // Send the count and let the client request individual rollbacks
-                    resp.payload = gson.toJson(found.get().getVersions());
-                    sendTo(session, resp.toJson());
-                }
-
-                case "ROLLBACK_VERSION" -> {
-                    if (documentRepository == null) { sendError(session, "Database not configured"); return; }
-                    if (!sessionManager.isEditor(session)) { sendError(session, "Only editors can rollback"); return; }
-                    if (isBlank(op.sessionCode)) { sendError(session, "Session code required"); return; }
-
-                    Optional<DocumentEntity> found =
-                            documentRepository.findByEditorCode(op.sessionCode.trim().toUpperCase());
-
-                    if (found.isEmpty()) { sendError(session, "Document not found"); return; }
-
-                    DocumentEntity doc = found.get();
-                    List<String> versions = doc.getVersions();
-
-                    if (op.versionIndex < 0 || op.versionIndex >= versions.size()) {
-                        sendError(session, "Invalid version index: " + op.versionIndex);
-                        return;
-                    }
-
-                    // Restore the chosen version
-                    String rolledBack = versions.get(op.versionIndex);
-                    doc.setCrdtJson(rolledBack);
-                    documentRepository.save(doc);
-
-                    // Broadcast DOC_LOADED to ALL clients in the session so their UI updates
-                    String code = sessionManager.getSessionCode(session);
-                    Operations notify = new Operations();
-                    notify.type    = "DOC_LOADED";
-                    notify.payload = rolledBack;
-                    broadcastToAll(code, notify.toJson());
-                }
                 case "OPEN_DOC" -> {
                     if (documentRepository == null) { sendError(session, "Database not configured"); return; }
                     if (isBlank(op.sessionCode))    { sendError(session, "Session code required"); return; }
-                    if (isBlank(op.username))       { sendError(session, "Username required"); return; }
+                    if (isBlank(op.username))        { sendError(session, "Username required"); return; }
 
                     Optional<DocumentEntity> found =
                             documentRepository.findByEditorCode(op.sessionCode.trim().toUpperCase());
@@ -431,7 +359,6 @@ public class Server extends TextWebSocketHandler {
                     String eCode = doc.getEditorCode();
                     String vCode = doc.getViewerCode();
 
-                    // Restore or reuse the in-memory session with the ORIGINAL codes
                     SessionManager.Session s = sessionManager.getSession(eCode);
                     if (s == null) {
                         s = sessionManager.restoreSession(eCode, vCode, op.username.trim(), session);
@@ -444,7 +371,7 @@ public class Server extends TextWebSocketHandler {
                     resp.sessionCode = eCode;
                     resp.editorCode  = eCode;
                     resp.viewerCode  = vCode;
-                    resp.payload     = doc.getCrdtJson(); // send content in same response
+                    resp.payload     = doc.getCrdtJson();
                     sendTo(session, resp.toJson());
                     broadcastActiveUsers(eCode);
 
@@ -453,7 +380,9 @@ public class Server extends TextWebSocketHandler {
 
                 case "RENAME_DOC" -> {
                     if (documentRepository == null) { sendError(session, "Database not configured"); return; }
-                    if (isBlank(op.sessionCode) || isBlank(op.payload)) { sendError(session, "Missing fields"); return; }
+                    if (isBlank(op.sessionCode) || isBlank(op.payload)) {
+                        sendError(session, "Missing fields"); return;
+                    }
                     if (isBlank(op.username)) { sendError(session, "Username required"); return; }
 
                     Optional<DocumentEntity> found =
@@ -473,9 +402,65 @@ public class Server extends TextWebSocketHandler {
                     System.out.println("[Server] Document renamed to: " + op.payload.trim());
                 }
 
+                // ==============================================================
+                // VERSION HISTORY
+                // ==============================================================
+
+                case "GET_VERSIONS" -> {
+                    if (documentRepository == null) { sendError(session, "Database not configured"); return; }
+                    if (isBlank(op.sessionCode)) { sendError(session, "Session code required"); return; }
+
+                    Optional<DocumentEntity> found =
+                            documentRepository.findByEditorCodeOrViewerCode(
+                                    op.sessionCode.trim().toUpperCase());
+
+                    if (found.isEmpty()) { sendError(session, "Document not found"); return; }
+
+                    Operations resp = new Operations();
+                    resp.type    = "VERSIONS_LIST";
+                    resp.payload = gson.toJson(found.get().getVersions());
+                    sendTo(session, resp.toJson());
+                }
+
+                case "ROLLBACK_VERSION" -> {
+                    if (documentRepository == null) { sendError(session, "Database not configured"); return; }
+                    if (!sessionManager.isEditor(session)) {
+                        sendError(session, "Only editors can rollback"); return;
+                    }
+                    if (isBlank(op.sessionCode)) { sendError(session, "Session code required"); return; }
+
+                    Optional<DocumentEntity> found =
+                            documentRepository.findByEditorCode(op.sessionCode.trim().toUpperCase());
+
+                    if (found.isEmpty()) { sendError(session, "Document not found"); return; }
+
+                    DocumentEntity doc = found.get();
+                    List<String> versions = doc.getVersions();
+
+                    if (op.versionIndex < 0 || op.versionIndex >= versions.size()) {
+                        sendError(session, "Invalid version index: " + op.versionIndex); return;
+                    }
+
+                    String rolledBack = versions.get(op.versionIndex);
+                    doc.setCrdtJson(rolledBack);
+                    documentRepository.save(doc);
+
+                    String code = sessionManager.getSessionCode(session);
+                    Operations notify = new Operations();
+                    notify.type    = "DOC_LOADED";
+                    notify.payload = rolledBack;
+                    broadcastToAll(code, notify.toJson());
+                }
+
+                // ==============================================================
+                // COMMENTS
+                // ==============================================================
+
                 case "ADD_COMMENT" -> {
                     if (documentRepository == null) { sendError(session, "Database not configured"); return; }
-                    if (!sessionManager.isEditor(session)) { sendError(session, "Viewers cannot comment"); return; }
+                    if (!sessionManager.isEditor(session)) {
+                        sendError(session, "Viewers cannot comment"); return;
+                    }
                     String code = sessionManager.getSessionCode(session);
                     if (code == null) { sendError(session, "Not in a session"); return; }
 
@@ -520,7 +505,6 @@ public class Server extends TextWebSocketHandler {
                     if (code == null) { sendError(session, "Not in a session"); return; }
 
                     Optional<DocumentEntity> found = documentRepository.findByEditorCode(code);
-                   // if (found.isEmpty()) { sendError(session, "Document not found"); return; }
 
                     Operations resp = new Operations();
                     resp.type    = "COMMENTS_LIST";
@@ -548,15 +532,14 @@ public class Server extends TextWebSocketHandler {
                     broadcastToAll(code, resp.toJson());
                 }
 
-
-
                 // ==============================================================
                 // UNKNOWN
                 // ==============================================================
 
                 default -> {
                     sendError(session, "Unknown message type: " + op.type);
-                    System.err.println("[Server] Unknown type '" + op.type + "' from " + session.getId());
+                    System.err.println("[Server] Unknown type '" + op.type
+                            + "' from " + session.getId());
                 }
             }
 
@@ -568,18 +551,11 @@ public class Server extends TextWebSocketHandler {
     }
 
     // -----------------------------------------------------------------------
-    // Database helpers  (Member 1)
+    // Database helpers
     // -----------------------------------------------------------------------
 
-    /**
-     * Saves (or updates) the document for a session to MongoDB.
-     * Before overwriting, snapshots the current state into the versions list.
-     *
-     * @param editorCode    The session's editor code (used as the natural key).
-     * @param ownerUsername The session owner's display name.
-     * @param crdtJson      The serialised CRDT state to persist.
-     */
-    private void saveDocument(String editorCode, String ownerUsername, String crdtJson) {
+    private void saveDocument(String editorCode, String ownerUsername,
+                              String crdtJson, String docName) {
         if (documentRepository == null) return;
 
         SessionManager.Session s = sessionManager.getSession(editorCode);
@@ -590,12 +566,13 @@ public class Server extends TextWebSocketHandler {
 
         if (existing.isPresent()) {
             doc = existing.get();
-            doc.snapshotCurrentVersion();    // archive the old state BEFORE overwriting
+            doc.snapshotCurrentVersion();
         } else {
             doc = new DocumentEntity(ownerUsername, editorCode, viewerCode, null);
         }
 
         doc.setCrdtJson(crdtJson);
+        if (!isBlank(docName)) doc.setDocumentName(docName);
         documentRepository.save(doc);
         System.out.println("[Server] Document saved for session " + editorCode);
     }
@@ -605,9 +582,8 @@ public class Server extends TextWebSocketHandler {
     // -----------------------------------------------------------------------
 
     /**
-     * Logs the operation, pushes to undo stack, buffers for disconnected
-     * clients, relays to all other clients in the session, and triggers
-     * auto-save every 10 operations.
+     * Logs the operation, pushes to undo stacks, buffers for disconnected
+     * clients, relays to all other clients in the session.
      */
     private void relayAndLog(WebSocketSession session, String rawJson,
                              Operations op, boolean trackUndo) {
@@ -617,12 +593,13 @@ public class Server extends TextWebSocketHandler {
         SessionManager.Session s = sessionManager.getSession(editorCode);
         s.logOperation(rawJson);
 
-        // Undo/Redo tracking (Member 2)
+        // Push to per-user AND session-level undo stacks
         if (trackUndo && op.username != null) {
             undoRedoManager.push(op.username, op);
+            undoRedoManager.pushToSession(editorCode, op);
         }
 
-        // Buffer for disconnected clients (Member 2 Bonus)
+        // Buffer for disconnected clients
         sessionManager.bufferMissedOp(editorCode, rawJson);
 
         // Relay to peers
@@ -630,13 +607,13 @@ public class Server extends TextWebSocketHandler {
             sendTo(other, rawJson);
         }
 
-        // Auto-save every 10 operations (Member 1)
+        // Auto-save every 10 operations
         if (s.shouldAutoSave() && documentRepository != null && op.payload != null) {
-            saveDocument(editorCode, op.ownerUsername, op.payload);
+            saveDocument(editorCode, op.ownerUsername, op.payload,
+                    op.documentName != null ? op.documentName : "Untitled");
         }
     }
 
-    /** Broadcast a message to every client (including the sender) in the session. */
     private void broadcastToAll(String editorCode, String json) {
         if (editorCode == null) return;
         for (WebSocketSession client : sessionManager.getAllClientsInSession(editorCode)) {
@@ -671,7 +648,8 @@ public class Server extends TextWebSocketHandler {
                 if (session.isOpen()) session.sendMessage(new TextMessage(json));
             }
         } catch (Exception e) {
-            System.err.println("[Server] Send failed to " + session.getId() + ": " + e.getMessage());
+            System.err.println("[Server] Send failed to "
+                    + session.getId() + ": " + e.getMessage());
         }
     }
 

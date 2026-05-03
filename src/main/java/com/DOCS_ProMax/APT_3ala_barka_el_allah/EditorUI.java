@@ -1037,7 +1037,13 @@ public class EditorUI {
         if (!file.getName().endsWith(".txt")) file = new java.io.File(file.getAbsolutePath() + ".txt");
 
         try (java.io.PrintWriter pw = new java.io.PrintWriter(new java.io.FileWriter(file))) {
-            pw.print(doc.RenderDocument());
+            // Export with formatting markers
+            for (CharNode node : doc.GetVisibleNodes()) {
+                if (node.isBold() && node.isItalic()) pw.print("***" + node.getValue() + "***");
+                else if (node.isBold()) pw.print("**" + node.getValue() + "**");
+                else if (node.isItalic()) pw.print("*" + node.getValue() + "*");
+                else pw.print(node.getValue());
+            }
             JOptionPane.showMessageDialog(frame, "Exported successfully to: " + file.getName());
         } catch (java.io.IOException ex) {
             JOptionPane.showMessageDialog(frame, "Failed to export: " + ex.getMessage());

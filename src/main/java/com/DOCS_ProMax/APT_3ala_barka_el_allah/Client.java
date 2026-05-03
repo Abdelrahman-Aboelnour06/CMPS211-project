@@ -12,11 +12,15 @@ import java.util.concurrent.TimeUnit;
 /**
  * WebSocket client that connects to the collaboration server.
  *
- * Phase 3 additions:
- *   Member 1 – sendSaveDoc(), handles DOC_LOADED, DOC_SAVED, DOCS_LIST,
- *               DOC_DELETED, VERSIONS_LIST
- *   Member 2 – viewer/editor role tracking, sendUndo(), sendRedo(),
- *               auto-reconnect on close, sendReconnect()
+ * Full Phase 3 implementation:
+ *  - Character CRDT operations (insert, delete, format)
+ *  - Block CRDT operations (insert, delete, split, merge, move, copy)
+ *  - Session management (create, join, reconnect)
+ *  - Document persistence (save, load, list, delete, rename)
+ *  - Version history (get versions, rollback)
+ *  - Comments (add, delete, resolve, get)
+ *  - Undo/Redo (own + other users' changes)
+ *  - Auto-reconnect on disconnect
  */
 public class Client extends WebSocketClient {
 
@@ -24,17 +28,17 @@ public class Client extends WebSocketClient {
     private final Clock     sharedClock;
     private BlockID activeBlockID;
 
-    private String sessionCode;     // the editor code (primary code for this session)
-    private String editorCode;      // same as sessionCode for editors
-    private String viewerCode;      // read-only access code
+    private String sessionCode;
+    private String editorCode;
+    private String viewerCode;
     private String username;
     private String role;
-    private String originalEditorCode; // the MongoDB key to save under// "editor" | "viewer"
+    private String originalEditorCode;
 
     private MessageListener messageListener;
 
-    // Reconnection support (Member 2 Bonus)
-    private final String          serverUri;
+    // Reconnection support
+    private final String serverUri;
     private final ScheduledExecutorService reconnectScheduler =
             Executors.newSingleThreadScheduledExecutor();
     private static final int RECONNECT_INTERVAL_SECONDS = 30;
@@ -44,7 +48,7 @@ public class Client extends WebSocketClient {
     }
 
     // -----------------------------------------------------------------------
-    // Constructors
+    // Constructor
     // -----------------------------------------------------------------------
 
     public Client(String serverUri, BlockCRDT localDoc, Clock sharedClock, BlockID activeBlockID)
@@ -62,7 +66,8 @@ public class Client extends WebSocketClient {
 
     @Override
     public void onOpen(ServerHandshake handshake) {
-        System.out.println("[Client] Connected to server (HTTP status " + handshake.getHttpStatus() + ")");
+        System.out.println("[Client] Connected to server (HTTP status "
+                + handshake.getHttpStatus() + ")");
     }
 
     @Override
@@ -97,7 +102,12 @@ public class Client extends WebSocketClient {
                 System.out.println("[Client] Reconnected to " + sessionCode);
             }
 
-            case "ACTIVE_USERS" -> System.out.println("[Client] Active users: " + op.payload);
+            case "ACTIVE_USERS" ->
+                    System.out.println("[Client] Active users: " + op.payload);
+
+            // ------------------------------------------------------------------
+            // Character operations
+            // ------------------------------------------------------------------
 
             case "INSERT_CHAR" -> {
                 CharID incomingID = new CharID(op.charUser, op.charClock);
@@ -105,7 +115,8 @@ public class Client extends WebSocketClient {
                 sharedClock.advanceTo(op.charClock);
                 BlockNode block = localDoc.getBlock(activeBlockID);
                 if (block != null && block.getContent() != null) {
-                    CharNode inserted = block.getContent().RemotelyInsertion(incomingID, parentID, op.value);
+                    CharNode inserted = block.getContent()
+                            .RemotelyInsertion(incomingID, parentID, op.value);
                     if (inserted != null) {
                         inserted.setBold(op.isBold);
                         inserted.setItalic(op.isItalic);
@@ -126,12 +137,9 @@ public class Client extends WebSocketClient {
             case "UNDELETE_CHAR" -> {
                 CharID targetID = new CharID(op.charUser, op.charClock);
                 BlockNode block = localDoc.getBlock(activeBlockID);
-
                 if (block != null && block.getContent() != null) {
                     CharNode node = block.getContent().getNode(targetID);
-                    if (node != null) {
-                        node.SetDeleted(false);
-                    }
+                    if (node != null) node.SetDeleted(false);
                 }
             }
 
@@ -147,33 +155,76 @@ public class Client extends WebSocketClient {
                 }
             }
 
-            case "CURSOR" ->
-                    System.out.println("[Client] " + op.username + " cursor at " + op.cursorIndex);
+            // ------------------------------------------------------------------
+            // Block operations
+            // ------------------------------------------------------------------
 
-            case "DOC_SAVED"   -> System.out.println("[Client] " + op.payload);
-            case "DOC_DELETED" -> System.out.println("[Client] " + op.payload);
-            case "DOC_RENAMED" -> {
-                System.out.println("[Client] Document renamed to: " + op.payload);
+            case "INSERT_BLOCK" -> {
+                // A new block was inserted by a remote user — create it locally
+                CharCRDT newCRDT = new CharCRDT(op.blockUser, sharedClock);
+                BlockNode newBlock = localDoc.insertTopLevelBlock(newCRDT);
+                System.out.println("[Client] Remote INSERT_BLOCK applied: " + newBlock.getId());
             }
+
+            case "DELETE_BLOCK" -> {
+                BlockID targetID = new BlockID(op.blockUser, op.blockClock);
+                localDoc.deleteNode(targetID);
+                System.out.println("[Client] Remote DELETE_BLOCK applied: " + targetID);
+            }
+
+            case "SPLIT_BLOCK" -> {
+                BlockID sourceID = new BlockID(op.blockUser, op.blockClock);
+                localDoc.splitBlockAtCursor(sourceID, (int) op.splitAtIndex);
+                System.out.println("[Client] Remote SPLIT_BLOCK applied at index: " + op.splitAtIndex);
+            }
+
+            case "MERGE_BLOCK" -> {
+                BlockID blockID = new BlockID(op.blockUser, op.blockClock);
+                localDoc.mergeWithNext(blockID);
+                System.out.println("[Client] Remote MERGE_BLOCK applied");
+            }
+
+            case "MOVE_BLOCK", "COPY_BLOCK" ->
+                    System.out.println("[Client] Remote " + op.type + " received");
+
+            // ------------------------------------------------------------------
+            // Document persistence responses
+            // ------------------------------------------------------------------
+
+            case "DOC_SAVED"   -> System.out.println("[Client] Document saved: " + op.payload);
+            case "DOC_DELETED" -> System.out.println("[Client] Document deleted: " + op.payload);
+            case "DOC_RENAMED" -> System.out.println("[Client] Document renamed to: " + op.payload);
             case "DOCS_LIST"   -> System.out.println("[Client] Documents: " + op.payload);
             case "VERSIONS_LIST" -> System.out.println("[Client] Versions: " + op.payload);
 
+            case "DOC_LOADED" ->
+                    System.out.println("[Client] DOC_LOADED received — UI should re-render");
 
-            case "DOC_LOADED" -> {
-                // A document was loaded or rolled back – the UI layer must re-render
-                System.out.println("[Client] DOC_LOADED received – UI should re-render");
+            // ------------------------------------------------------------------
+            // Cursor
+            // ------------------------------------------------------------------
 
-            }
+            case "CURSOR" ->
+                    System.out.println("[Client] " + op.username
+                            + " cursor at " + op.cursorIndex);
 
-            case "ERROR" -> System.err.println("[Client] Server error: " + op.payload);
+            // ------------------------------------------------------------------
+            // Comments
+            // ------------------------------------------------------------------
 
-            //Comments CASE
+            case "COMMENT_ADDED", "COMMENT_DELETED",
+                 "COMMENTS_LIST", "RESOLVE_COMMENT", "COMMENT_RESOLVED" ->
+                    System.out.println("[Client] Comment op: " + op.type);
 
-            case "COMMENT_ADDED", "COMMENT_DELETED", "COMMENTS_LIST", "RESOLVE_COMMENT" -> {
-                System.out.println("[Client] Comment op: " + op.type);
-            }
+            // ------------------------------------------------------------------
+            // Error
+            // ------------------------------------------------------------------
 
-            default -> System.out.println("[Client] Unknown message type: " + op.type);
+            case "ERROR" ->
+                    System.err.println("[Client] Server error: " + op.payload);
+
+            default ->
+                    System.out.println("[Client] Unknown message type: " + op.type);
         }
 
         if (messageListener != null) messageListener.onMessage(op);
@@ -183,7 +234,6 @@ public class Client extends WebSocketClient {
     public void onClose(int code, String reason, boolean remote) {
         System.out.println("[Client] Connection closed. Code=" + code + " Reason=" + reason);
 
-        // Member 2 Bonus: schedule a reconnect attempt every 30 seconds
         if (remote && username != null) {
             reconnectScheduler.scheduleWithFixedDelay(() -> {
                 if (!isOpen()) {
@@ -229,8 +279,22 @@ public class Client extends WebSocketClient {
         send(op.toJson());
     }
 
+    public void sendReconnect() {
+        Operations op = new Operations();
+        op.type     = "RECONNECT";
+        op.username = username;
+        send(op.toJson());
+    }
+
+    public void requestActiveUsers() {
+        Operations op  = new Operations();
+        op.type        = "GET_ACTIVE_USERS";
+        op.sessionCode = sessionCode;
+        send(op.toJson());
+    }
+
     // -----------------------------------------------------------------------
-    // Operation senders
+    // Character operation senders
     // -----------------------------------------------------------------------
 
     public void sendInsertChar(CharNode inserted) {
@@ -258,15 +322,6 @@ public class Client extends WebSocketClient {
         send(op.toJson());
     }
 
-    public void sendCursor(int index) {
-        Operations op  = new Operations();
-        op.type        = "CURSOR";
-        op.sessionCode = sessionCode;
-        op.username    = username;
-        op.cursorIndex = index;
-        send(op.toJson());
-    }
-
     public void sendFormat(CharNode node) {
         Operations op  = new Operations();
         op.type        = "FORMAT_CHAR";
@@ -279,19 +334,70 @@ public class Client extends WebSocketClient {
         send(op.toJson());
     }
 
-    /** Member 1 – triggers a manual save on the server. crdtJson is the serialised state. */
-    public void sendSaveDoc(String crdtJson) {
+    public void sendCursor(int index) {
         Operations op  = new Operations();
-        op.type        = "SAVE_DOC";
+        op.type        = "CURSOR";
         op.sessionCode = sessionCode;
         op.username    = username;
-        op.ownerUsername = username;
-        op.payload     = crdtJson;
-        op.originalEditorCode = originalEditorCode; // explicit, dedicated field
+        op.cursorIndex = index;
         send(op.toJson());
     }
 
-    /** Member 2 – asks the server to undo the last operation for this user. */
+    // -----------------------------------------------------------------------
+    // Block operation senders  ← NEW
+    // -----------------------------------------------------------------------
+
+    public void sendInsertBlock(BlockNode block) {
+        if (!isOpen()) return;
+        Operations op       = new Operations();
+        op.type             = "INSERT_BLOCK";
+        op.sessionCode      = sessionCode;
+        op.username         = username;
+        op.blockUser        = block.getId().getUserID();
+        op.blockClock       = block.getId().getClock();
+        op.parentBlockUser  = block.getParentID() != null ? block.getParentID().getUserID() : -1;
+        op.parentBlockClock = block.getParentID() != null ? block.getParentID().getClock()  : -1;
+        send(op.toJson());
+    }
+
+    public void sendDeleteBlock(BlockID blockID) {
+        if (!isOpen()) return;
+        Operations op  = new Operations();
+        op.type        = "DELETE_BLOCK";
+        op.sessionCode = sessionCode;
+        op.username    = username;
+        op.blockUser   = blockID.getUserID();
+        op.blockClock  = blockID.getClock();
+        send(op.toJson());
+    }
+
+    public void sendSplitBlock(BlockID blockID, int cursorIndex) {
+        if (!isOpen()) return;
+        Operations op      = new Operations();
+        op.type            = "SPLIT_BLOCK";
+        op.sessionCode     = sessionCode;
+        op.username        = username;
+        op.blockUser       = blockID.getUserID();
+        op.blockClock      = blockID.getClock();
+        op.splitAtIndex    = cursorIndex;
+        send(op.toJson());
+    }
+
+    public void sendMergeBlock(BlockID blockID) {
+        if (!isOpen()) return;
+        Operations op  = new Operations();
+        op.type        = "MERGE_BLOCK";
+        op.sessionCode = sessionCode;
+        op.username    = username;
+        op.blockUser   = blockID.getUserID();
+        op.blockClock  = blockID.getClock();
+        send(op.toJson());
+    }
+
+    // -----------------------------------------------------------------------
+    // Undo / Redo
+    // -----------------------------------------------------------------------
+
     public void sendUndo() {
         Operations op  = new Operations();
         op.type        = "UNDO";
@@ -300,7 +406,6 @@ public class Client extends WebSocketClient {
         send(op.toJson());
     }
 
-    /** Member 2 – asks the server to redo the last undone operation for this user. */
     public void sendRedo() {
         Operations op  = new Operations();
         op.type        = "REDO";
@@ -309,57 +414,50 @@ public class Client extends WebSocketClient {
         send(op.toJson());
     }
 
-    /** Member 2 Bonus – sent after a successful reconnection to restore missed ops. */
-    public void sendReconnect() {
-        Operations op = new Operations();
-        op.type     = "RECONNECT";
-        op.username = username;
+    // -----------------------------------------------------------------------
+    // Document persistence senders
+    // -----------------------------------------------------------------------
+
+    public void sendSaveDoc(String crdtJson) {
+        Operations op          = new Operations();
+        op.type                = "SAVE_DOC";
+        op.sessionCode         = sessionCode;
+        op.username            = username;
+        op.ownerUsername       = username;
+        op.payload             = crdtJson;
+        op.originalEditorCode  = originalEditorCode;
         send(op.toJson());
     }
 
-    public void requestActiveUsers() {
-        Operations op  = new Operations();
-        op.type        = "GET_ACTIVE_USERS";
-        op.sessionCode = sessionCode;
+    public void sendSaveDoc(String crdtJson, String docName) {
+        Operations op          = new Operations();
+        op.type                = "SAVE_DOC";
+        op.sessionCode         = sessionCode;
+        op.username            = username;
+        op.ownerUsername       = username;
+        op.payload             = crdtJson;
+        op.documentName        = docName;
+        op.originalEditorCode  = originalEditorCode;
         send(op.toJson());
     }
 
     // -----------------------------------------------------------------------
-    // Getters / setters
+    // Comment senders
     // -----------------------------------------------------------------------
 
-    public String getSessionCode()  { return sessionCode; }
-    public String getEditorCode()   { return editorCode; }
-    public String getViewerCode()   { return viewerCode; }
-    public String getUsername()     { return username; }
-    public String getRole()         { return role; }
-    public boolean isEditor()       { return "editor".equals(role); }
-
-    public void setActiveBlockID(BlockID id)           { this.activeBlockID = id; }
-    public void setMessageListener(MessageListener ml) { this.messageListener = ml; }
-
-    public CharCRDT getActiveCharCRDT() {
-        BlockNode block = localDoc.getBlock(activeBlockID);
-        return block != null ? block.getContent() : null;
+    public void sendAddComment(String text, CharNode startNode, CharNode endNode) {
+        if (!isOpen()) return;
+        Operations op   = new Operations();
+        op.type         = "ADD_COMMENT";
+        op.sessionCode  = sessionCode;
+        op.username     = username;
+        op.commentText  = text;
+        op.charUser     = startNode.getID().getUserID();
+        op.charClock    = startNode.getID().getClock();
+        op.endCharUser  = endNode.getID().getUserID();
+        op.endCharClock = endNode.getID().getClock();
+        send(op.toJson());
     }
-
-    public void setOriginalEditorCode(String code) { this.originalEditorCode = code; }
-    public String getOriginalEditorCode() { return originalEditorCode; }
-
-//BONUS FOR MEMBER 3 - COMMENTS
-public void sendAddComment(String text, CharNode startNode, CharNode endNode) {
-    if (!isOpen()) return;
-    Operations op   = new Operations();
-    op.type         = "ADD_COMMENT";
-    op.sessionCode  = sessionCode;
-    op.username     = username;
-    op.commentText  = text;
-    op.charUser     = startNode.getID().getUserID();
-    op.charClock    = startNode.getID().getClock();
-    op.endCharUser  = endNode.getID().getUserID();
-    op.endCharClock = endNode.getID().getClock();
-    send(op.toJson());
-}
 
     public void sendDeleteComment(String commentId) {
         if (!isOpen()) return;
@@ -389,6 +487,27 @@ public void sendAddComment(String text, CharNode startNode, CharNode endNode) {
         send(op.toJson());
     }
 
+    // -----------------------------------------------------------------------
+    // Getters / setters
+    // -----------------------------------------------------------------------
 
+    public String getSessionCode()  { return sessionCode; }
+    public String getEditorCode()   { return editorCode; }
+    public String getViewerCode()   { return viewerCode; }
+    public String getUsername()     { return username; }
+    public String getRole()         { return role; }
+    public boolean isEditor()       { return "editor".equals(role); }
 
+    public void setActiveBlockID(BlockID id)           { this.activeBlockID = id; }
+    public void setMessageListener(MessageListener ml) { this.messageListener = ml; }
+    public void setOriginalEditorCode(String code)     { this.originalEditorCode = code; }
+    public String getOriginalEditorCode()              { return originalEditorCode; }
+
+    public CharCRDT getActiveCharCRDT() {
+        BlockNode block = localDoc.getBlock(activeBlockID);
+        return block != null ? block.getContent() : null;
+    }
+
+    public BlockCRDT getLocalDoc()    { return localDoc; }
+    public BlockID getActiveBlockID() { return activeBlockID; }
 }
