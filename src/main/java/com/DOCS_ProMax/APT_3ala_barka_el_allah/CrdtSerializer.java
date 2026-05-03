@@ -31,11 +31,11 @@ public class CrdtSerializer {
 
     // DTO used only for serialisation – not a domain object
     private static class NodeDto {
-        int    userID;
-        long   clock;
-        int    parentUser;
-        long   parentClock;
-        char   value;
+        int userID;
+        long clock;
+        int parentUser;
+        long parentClock;
+        char value;
         boolean bold;
         boolean italic;
         boolean deleted;
@@ -52,15 +52,15 @@ public class CrdtSerializer {
     public static String toJson(CharCRDT crdt) {
         List<NodeDto> dtos = new ArrayList<>();
         for (CharNode n : crdt.getOrderedNodes()) {
-            NodeDto dto   = new NodeDto();
-            dto.userID    = n.getID().getUserID();
-            dto.clock     = n.getID().getClock();
-            dto.parentUser  = n.getParentID() != null ? n.getParentID().getUserID() : -1;
-            dto.parentClock = n.getParentID() != null ? n.getParentID().getClock()  : -1;
-            dto.value     = n.getValue();
-            dto.bold      = n.isBold();
-            dto.italic    = n.isItalic();
-            dto.deleted   = n.isDeleted();
+            NodeDto dto = new NodeDto();
+            dto.userID = n.getID().getUserID();
+            dto.clock = n.getID().getClock();
+            dto.parentUser = n.getParentID() != null ? n.getParentID().getUserID() : -1;
+            dto.parentClock = n.getParentID() != null ? n.getParentID().getClock() : -1;
+            dto.value = n.getValue();
+            dto.bold = n.isBold();
+            dto.italic = n.isItalic();
+            dto.deleted = n.isDeleted();
             dtos.add(dto);
         }
         return GSON.toJson(dtos);
@@ -74,15 +74,16 @@ public class CrdtSerializer {
      * Reconstructs a {@link CharCRDT} from a JSON string that was previously
      * produced by {@link #toJson(CharCRDT)}.
      *
-     * @param json    The stored JSON blob.
-     * @param userId  The userID to assign to the reconstructed CRDT's local clock.
+     * @param json   The stored JSON blob.
+     * @param userId The userID to assign to the reconstructed CRDT's local clock.
      */
     // -----------------------------------------------------------------------
     // Deserialise
     // -----------------------------------------------------------------------
     public static CharCRDT fromJson(String json, int userId) {
         if (json == null || json.isBlank()) return new CharCRDT(userId);
-        Type listType = new TypeToken<List<NodeDto>>() {}.getType();
+        Type listType = new TypeToken<List<NodeDto>>() {
+        }.getType();
         List<NodeDto> dtos = GSON.fromJson(json, listType);
 
         CharCRDT crdt = new CharCRDT(userId);
@@ -105,3 +106,4 @@ public class CrdtSerializer {
         }
         return crdt;
     }
+}
