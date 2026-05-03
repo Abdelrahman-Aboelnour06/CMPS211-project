@@ -24,7 +24,7 @@ public class StartScreen {
             BlockCRDT doc = new BlockCRDT(userId, clock);
             BlockNode block = doc.insertTopLevelBlock(new CharCRDT(userId, clock));
 
-            client = new Client("ws://172.20.10.3:8080/collab", doc, clock, block.getId());            client.connectBlocking();
+            client = new Client("ws://172.20.10.3:8080/collab", doc, clock, block.getId());  client.connectBlocking();
         } catch (Exception e) {
             e.printStackTrace();
         }

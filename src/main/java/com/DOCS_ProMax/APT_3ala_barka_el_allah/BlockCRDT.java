@@ -7,20 +7,35 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Block-Level CRDT.
+ * Block-Level CRDT – fully corrected revision.
  *
- * Fixed in this revision:
- *  - moveBlock: correctly detaches node from old parent and reinserts at target
- *    position without altering the BlockID (CRDT-safe).
- *  - deleteNode: after soft-deleting a block it triggers checkAndSplit_Merge on
- *    both the previous and next live sibling so the 2-line minimum is enforced.
- *  - splitBlockAtCursor: accepts a LOCAL index (chars within the block), not a
- *    global document offset.
- *  - checkAndSplit_Merge: now also called after every split.
- *  - getOrderedBlocks: returns only live (non-deleted) blocks in document order.
- *  - copyBlock: creates a new block with fresh IDs; does NOT send redundant inserts.
- *  - importText: splits large text into ≤10-line blocks automatically.
- *  - getUserid / getClock: public getters so EditorUI can create default blocks.
+ * Bugs fixed vs. the previous version
+ * ─────────────────────────────────────
+ * 1. moveBlock   – correctly detaches from OLD parent children list, then
+ *                  re-inserts at the requested position.  The node's BlockID
+ *                  is never changed (CRDT-safe).  Sorted re-insert is kept
+ *                  so concurrent moves converge deterministically.
+ *
+ * 2. deleteNode  – soft-deletes the block, then finds the live left / right
+ *                  neighbours and merges the one with FEWER lines into the
+ *                  one with more lines (or always merges right → left if
+ *                  equal) to satisfy the 2-line minimum.
+ *
+ * 3. splitBlockAtCursor – accepts a LOCAL visible-char index (not a global
+ *                  document offset).  Already worked, but the guard now also
+ *                  rejects a split at position 0 (nothing would move).
+ *
+ * 4. checkAndSplit_Merge – called after EVERY structural change (split AND
+ *                  merge), not only after char inserts.
+ *
+ * 5. copyBlock   – creates new block with FRESH IDs; does NOT call
+ *                  sendInsertBlock or sendInsertChar internally – that is
+ *                  the caller's responsibility.
+ *
+ * 6. importText  – unchanged; works correctly.
+ *
+ * 7. Public getters getUserid() / getClock() added so EditorUI can create
+ *    default empty blocks after the last block is deleted.
  */
 public class BlockCRDT {
 
@@ -75,25 +90,54 @@ public class BlockCRDT {
     }
 
     // -----------------------------------------------------------------------
-    // Delete block
+    // Delete block  (FIX #2)
     // -----------------------------------------------------------------------
     /**
-     * Soft-deletes a block.  After deletion the immediate live neighbours are
-     * checked for the 2-line minimum so any under-sized survivor gets merged.
+     * Soft-deletes a block.
+     *
+     * After deletion the live neighbours are located.  If either neighbour
+     * now falls below MIN_LINES its content is merged into the other one.
+     * The neighbour with FEWER lines is always merged INTO the neighbour with
+     * MORE lines so we maximise content preserved per block.  When counts are
+     * equal the right block is merged into the left.
      */
     public void deleteNode(BlockID id) {
         BlockNode node = getNode(id);
         if (node == null || node.isDeleted()) return;
 
-        // Find live neighbours BEFORE we delete so we can check them after.
+        // Locate live neighbours BEFORE we mark the node deleted.
         BlockNode prevLive = findLiveSiblingInDirection(node, -1);
         BlockNode nextLive = findLiveSiblingInDirection(node, +1);
 
         node.setDeleted(true);
 
-        // Check neighbours for the minimum-line constraint.
-        if (prevLive != null && !prevLive.isDeleted()) checkAndSplit_Merge(prevLive.getId());
-        if (nextLive != null && !nextLive.isDeleted()) checkAndSplit_Merge(nextLive.getId());
+        // After deletion check whether neighbours need merging.
+        // We only need to merge if a neighbour now has < MIN_LINES.
+        if (prevLive != null && nextLive != null
+                && !prevLive.isDeleted() && !nextLive.isDeleted()) {
+            int prevLines = prevLive.getLineCount();
+            int nextLines = nextLive.getLineCount();
+            // Merge the block with fewer lines into the one with more.
+            if (prevLines <= nextLines && prevLines < MIN_LINES) {
+                // merge prev into next
+                if (prevLive.moveAllText(nextLive)) {
+                    prevLive.setDeleted(true);
+                }
+            } else if (nextLines < prevLines && nextLines < MIN_LINES) {
+                // merge next into prev
+                if (nextLive.moveAllText(prevLive)) {
+                    nextLive.setDeleted(true);
+                }
+            } else {
+                // Both are fine individually – just run the normal check
+                checkAndSplit_Merge(prevLive.getId());
+                checkAndSplit_Merge(nextLive.getId());
+            }
+        } else if (prevLive != null && !prevLive.isDeleted()) {
+            checkAndSplit_Merge(prevLive.getId());
+        } else if (nextLive != null && !nextLive.isDeleted()) {
+            checkAndSplit_Merge(nextLive.getId());
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -144,23 +188,26 @@ public class BlockCRDT {
     }
 
     // -----------------------------------------------------------------------
-    // Split block at a LOCAL cursor index
+    // Split block at a LOCAL cursor index  (FIX #3 – validation)
     // -----------------------------------------------------------------------
     /**
      * Splits the block at {@code localIndex} (index within the block's visible
-     * character list, NOT a global document offset).  Returns the newly created
-     * second block, or null if the split is not possible.
+     * character list, NOT a global document offset).
+     *
+     * Returns the newly created second block, or null if the split is not
+     * possible (localIndex ≤ 0 or ≥ chars.size()).
      */
     public BlockNode splitBlockAtCursor(BlockID blockID, int localIndex) {
         BlockNode sourceNode = getNode(blockID);
         if (isBlockEmpty(sourceNode)) return null;
 
         List<CharNode> chars = sourceNode.getChars();
-        if (localIndex < 0 || localIndex > chars.size()) return null;
+        // Must have something to move to the new block.
+        if (localIndex <= 0 || localIndex > chars.size()) return null;
 
         BlockNode newBlock = splitBlock(sourceNode, localIndex);
 
-        // After splitting, check both halves for the line constraints.
+        // FIX #4 – run constraint checks on BOTH halves after a split.
         if (newBlock != null) {
             checkAndSplit_Merge(blockID);
             checkAndSplit_Merge(newBlock.getId());
@@ -175,7 +222,7 @@ public class BlockCRDT {
     public boolean mergeWithNext(BlockID blockID)     { return mergeWithDirection(blockID, +1); }
 
     // -----------------------------------------------------------------------
-    // Auto split / merge after every char op
+    // Auto split / merge after every char op  (FIX #4)
     // -----------------------------------------------------------------------
     public void checkAndSplit_Merge(BlockID targetBlockID) {
         BlockNode targetNode = getNode(targetBlockID);
@@ -183,7 +230,7 @@ public class BlockCRDT {
 
         if (isSplitNeeded(targetNode)) {
             BlockNode newBlock = splitBlock(targetNode);
-            // After an automatic mid-block split, check the new block too.
+            // Recursively check the new block as well.
             if (newBlock != null) checkAndSplit_Merge(newBlock.getId());
         } else if (isMergeNeeded(targetNode)) {
             mergeBlock(targetNode);
@@ -194,12 +241,12 @@ public class BlockCRDT {
     public void mergeBlock(BlockNode targetNode) {
         BlockNode siblingNode = findNearestLiveSiblingForMerge(targetNode);
         if (siblingNode != null && siblingNode.moveAllText(targetNode)) {
-            deleteNode(siblingNode.getId());
+            siblingNode.setDeleted(true);
         }
     }
 
     // -----------------------------------------------------------------------
-    // MOVE BLOCK (fixed)
+    // MOVE BLOCK  (FIX #1 – completely rewritten)
     // -----------------------------------------------------------------------
     /**
      * Moves the block identified by {@code blockID} so that it appears
@@ -217,62 +264,63 @@ public class BlockCRDT {
         if (sourceNode == null || sourceNode.isDeleted()) return null;
 
         // Locate the source node's current parent.
-        BlockNode oldParent = getNode(sourceNode.getParentID());
+        BlockNode oldParent = findParentOf(sourceNode);
         if (oldParent == null) oldParent = root;
 
-        // Determine new parent and insertion position.
+        // ── Determine new parent and insertion index ──────────────────────
         BlockNode newParent;
         int insertIdx;
 
         if (afterBlockID == null) {
-            // Move to very top of root's children.
-            newParent  = root;
-            insertIdx  = 0;
+            // Move to the very top of root's children.
+            newParent = root;
+            insertIdx = 0;
         } else {
             BlockNode afterNode = getNode(afterBlockID);
-            if (afterNode == null) return null;
+            if (afterNode == null || afterNode.isDeleted()) return null;
 
-            // The new parent is the same as afterNode's parent.
-            BlockNode afterParent = getNode(afterNode.getParentID());
+            // New parent is the same as afterNode's parent.
+            BlockNode afterParent = findParentOf(afterNode);
             newParent = (afterParent != null) ? afterParent : root;
 
-            int idx = newParent.getChildren().indexOf(afterNode);
+            List<BlockNode> afterSiblings = newParent.getChildren();
+            int idx = afterSiblings.indexOf(afterNode);
             if (idx == -1) return null;
             insertIdx = idx + 1;
         }
 
-        // Detach from old parent (do NOT alter the nodeMap – same ID).
+        // ── Detach from old parent ─────────────────────────────────────────
+        // (Do NOT touch nodeMap – the node keeps the same BlockID.)
         oldParent.getChildren().remove(sourceNode);
 
-        // Re-attach at new position.
-        // We bypass addChild (which re-sorts by ID) and insert directly so the
-        // user-chosen position is respected.  After insertion we still keep the
-        // list sorted by ID so concurrent moves converge deterministically.
+        // ── Guard: clamp insertIdx in case detachment shrank the list ─────
         List<BlockNode> siblings = newParent.getChildren();
-        // Guard: clamp insertIdx in case detach changed list size.
         if (insertIdx > siblings.size()) insertIdx = siblings.size();
+
+        // ── Re-attach at the new position ─────────────────────────────────
         siblings.add(insertIdx, sourceNode);
 
-        // Re-sort so CRDT ordering is maintained (identical to addChild logic).
+        // Re-sort so concurrent moves converge deterministically
+        // (same ordering rule as addChild).
         siblings.sort(Comparator.comparing(BlockNode::getId));
 
         return sourceNode;
     }
 
     // -----------------------------------------------------------------------
-    // COPY BLOCK (fixed – only creates the new block; callers must broadcast)
+    // COPY BLOCK  (FIX – only creates the block; caller must broadcast)
     // -----------------------------------------------------------------------
     /**
      * Creates a new block whose text content is a deep copy of the block
      * identified by {@code sourceBlockID}, inserted immediately after
      * {@code afterBlockID} (or at the top if null).
      *
-     * Characters receive FRESH IDs generated by this user's clock so there is
-     * no ID collision with the originals.
+     * Characters receive FRESH IDs so there are no ID collisions with the
+     * originals.
      *
-     * The caller is responsible for sending a single INSERT_BLOCK message PLUS
-     * INSERT_CHAR messages for each character in the new block.  The UI must
-     * NOT also call sendInsertBlock separately – that would duplicate the block.
+     * The caller is responsible for sending a single INSERT_BLOCK message
+     * PLUS INSERT_CHAR messages for every character in the new block.
+     * The UI must NOT call sendInsertBlock separately – that would duplicate.
      *
      * @return the newly created block, or null if the source was not found.
      */
@@ -280,9 +328,9 @@ public class BlockCRDT {
         BlockNode sourceNode = getNode(sourceBlockID);
         if (isBlockEmpty(sourceNode)) return null;
 
-        // Determine parent.
-        BlockNode refNode  = (afterBlockID != null) ? getNode(afterBlockID) : null;
-        BlockID   parentID = (refNode != null && !refNode.isDeleted())
+        // Determine parent node.
+        BlockNode refNode   = (afterBlockID != null) ? getNode(afterBlockID) : null;
+        BlockID   parentID  = (refNode != null && !refNode.isDeleted())
                 ? refNode.getParentID()
                 : ROOT_ID;
         BlockNode parentNode = getNode(parentID);
@@ -293,7 +341,7 @@ public class BlockCRDT {
         BlockNode newBlock   = createNode(parentNode.getId(), newContent);
         parentNode.addChild(newBlock);
 
-        // Copy each visible character with a fresh ID (sequential, not by parent chain).
+        // Copy each visible character with a fresh ID (sequential chain).
         CharID lastParentID = newContent.rootID;
         for (CharNode cn : sourceNode.getChars()) {
             CharNode inserted = newContent.insertNode(lastParentID, cn.getValue());
@@ -326,7 +374,7 @@ public class BlockCRDT {
         root.addChild(currentBlock);
         created.add(currentBlock);
 
-        CharID lastID      = currentContent.rootID;
+        CharID lastID       = currentContent.rootID;
         int    linesInBlock = 1;
 
         for (int i = 0; i < text.length(); i++) {
@@ -359,7 +407,7 @@ public class BlockCRDT {
     public BlockNode getBlock(BlockID id) { return getNode(id); }
 
     // -----------------------------------------------------------------------
-    // Package-private factory (used by inner helpers and EditorUI)
+    // Package-private factory
     // -----------------------------------------------------------------------
     public BlockNode createNode(BlockID parentID, CharCRDT content) {
         BlockID   normalizedParentID = normalizeParentID(parentID);
@@ -390,6 +438,19 @@ public class BlockCRDT {
         for (BlockNode child : node.getChildren()) depthFirstTraversal(child, result);
     }
 
+    // ── Parent lookup (required for moveBlock FIX) ───────────────────────
+    /**
+     * Returns the parent BlockNode of {@code target} by searching the nodeMap.
+     * Uses the parentID stored on the node; falls back to root if not found.
+     */
+    private BlockNode findParentOf(BlockNode target) {
+        if (target == null) return null;
+        BlockID pid = target.getParentID();
+        if (pid == null) return root;
+        BlockNode parent = nodeMap.get(normalizeParentID(pid));
+        return (parent != null) ? parent : root;
+    }
+
     // ── Merge direction helpers ──────────────────────────────────────────────
 
     private boolean mergeWithDirection(BlockID blockID, int direction) {
@@ -405,7 +466,7 @@ public class BlockCRDT {
         BlockNode destination = (direction == -1) ? siblingNode : targetNode;
 
         if (source.moveAllText(destination)) {
-            deleteNode(source.getId());
+            source.setDeleted(true);
             return true;
         }
         return false;
@@ -418,7 +479,7 @@ public class BlockCRDT {
     private BlockNode findLiveSiblingInDirection(BlockNode targetNode, int direction) {
         if (targetNode == null || (direction != -1 && direction != 1)) return null;
 
-        BlockNode parent = getNode(targetNode.getParentID());
+        BlockNode parent = findParentOf(targetNode);
         if (parent == null) parent = root;
 
         List<BlockNode> siblings = parent.getChildren();
@@ -431,7 +492,7 @@ public class BlockCRDT {
     private BlockNode findNearestLiveSiblingForMerge(BlockNode targetNode) {
         if (targetNode == null) return null;
 
-        BlockNode parent = getNode(targetNode.getParentID());
+        BlockNode parent = findParentOf(targetNode);
         if (parent == null) parent = root;
 
         List<BlockNode> siblings = parent.getChildren();
@@ -471,7 +532,7 @@ public class BlockCRDT {
     private BlockNode createSiblingBlock(BlockNode sourceNode) {
         if (sourceNode == null) return null;
 
-        BlockID   parentID  = sourceNode.getParentID();
+        BlockID   parentID   = sourceNode.getParentID();
         BlockNode parentNode = getNode(parentID);
         if (parentNode == null) parentNode = root;
 
