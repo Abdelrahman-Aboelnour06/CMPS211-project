@@ -557,6 +557,9 @@ public class Server extends TextWebSocketHandler {
     // -----------------------------------------------------------------------
     // Database helpers
     // -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
+    // Database helpers
+    // -----------------------------------------------------------------------
     private void saveDocument(String editorCode, String ownerUsername,
                               String crdtJson, String docName) {
         if (documentRepository == null) return;
