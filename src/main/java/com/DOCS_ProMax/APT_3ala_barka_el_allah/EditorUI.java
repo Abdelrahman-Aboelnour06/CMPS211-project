@@ -397,7 +397,7 @@ public class EditorUI {
                     e.consume();
                     int cursorPosition = textPane.getCaretPosition();
                     if (cursorPosition > 0) {
-                        CharNode deleted = doc.LocalDelete(cursorPosition - 1);
+                        CharNode deleted = globalDelete(cursorPosition - 1);
                         if (deleted != null) client.sendDeleteChar(deleted);
                         shiftRemoteCursors(cursorPosition - 1, -1);
                         renderDocument(cursorPosition - 1);
@@ -412,7 +412,7 @@ public class EditorUI {
                     int safeIndex = Math.min(cursorPosition, doc.RenderDocument().length());
 
                     // Insert the newline character into the CharCRDT
-                    CharNode inserted = doc.LocalInsert('\n', safeIndex);
+                    CharNode inserted = globalInsert('\n', safeIndex);
                     if (inserted != null) client.sendInsertChar(inserted);
                     shiftRemoteCursors(safeIndex, +1);
 
@@ -452,7 +452,7 @@ public class EditorUI {
                 int cursorPosition = textPane.getCaretPosition();
                 int safeIndex = Math.min(cursorPosition, doc.RenderDocument().length());
 
-                CharNode inserted = doc.LocalInsert(typedChar, safeIndex);
+                CharNode inserted = globalInsert(typedChar, safeIndex);
                 doc.InheritFormatting(safeIndex);
                 if (inserted != null) client.sendInsertChar(inserted);
                 shiftRemoteCursors(safeIndex, +1);
@@ -843,12 +843,57 @@ public class EditorUI {
         drawRemoteCursors();
     }
 
+
+
     // =========================================================================
     // Render
     // =========================================================================
+    // ADD THIS NEW METHOD just above renderDocument()
+    private List<CharNode> getAllVisibleNodes() {
+        List<CharNode> result = new java.util.ArrayList<>();
+        for (BlockNode block : client.getLocalDoc().getOrderedNodes()) {
+            if (block.isDeleted() || block.getContent() == null) continue;
+            for (CharNode node : block.getContent().getOrderedNodes()) {
+                if (!node.isDeleted()) result.add(node);
+            }
+        }
+        if (result.isEmpty()) result = doc.GetVisibleNodes();
+        return result;
+    }
 
+    private CharNode globalDelete(int globalIndex) {
+        List<CharNode> allNodes = getAllVisibleNodes();
+        if (globalIndex >= 0 && globalIndex < allNodes.size()) {
+            CharNode node = allNodes.get(globalIndex);
+            node.SetDeleted(true);
+            return node;
+        }
+        return null;
+    }
+
+    private CharNode globalInsert(char value, int globalIndex) {
+        List<CharNode> allNodes = getAllVisibleNodes();
+
+        if (globalIndex == 0) {
+            // Insert at the very beginning — use the first active block's root
+            for (BlockNode block : client.getLocalDoc().getOrderedNodes()) {
+                if (!block.isDeleted() && block.getContent() != null)
+                    return block.getContent().insertNode(block.getContent().rootID, value);
+            }
+            return doc.LocalInsert(value, 0);
+        }
+
+        // Insert after the node at globalIndex-1
+        CharNode parentNode = allNodes.get(globalIndex - 1);
+        for (BlockNode block : client.getLocalDoc().getOrderedNodes()) {
+            if (block.isDeleted() || block.getContent() == null) continue;
+            if (block.getContent().getNode(parentNode.getID()) != null)
+                return block.getContent().insertNode(parentNode.getID(), value);
+        }
+        return doc.LocalInsert(value, globalIndex);
+    }
     private void renderDocument(int newCursorPosition) {
-        List<CharNode> nodes = doc.GetVisibleNodes();
+        List<CharNode> nodes = getAllVisibleNodes();
         textPane.setText("");
         StyledDocument styledDoc = textPane.getStyledDocument();
         try {
@@ -1074,7 +1119,7 @@ public class EditorUI {
             @Override
             protected void done() {
                 progressDialog.dispose();
-                renderDocument(doc.RenderDocument().length());
+                renderDocument(getAllVisibleNodes().size());
                 drawRemoteCursors();
                 JOptionPane.showMessageDialog(frame,
                         "Import complete! " + finalContent.length() + " characters added.",
@@ -1140,7 +1185,7 @@ public class EditorUI {
             int cursorPosition = textPane.getCaretPosition();
             int safeIndex = Math.min(cursorPosition, doc.RenderDocument().length());
             for (int i = 0; i < pasted.length(); i++) {
-                CharNode inserted = doc.LocalInsert(pasted.charAt(i), safeIndex + i);
+                CharNode inserted = globalInsert(pasted.charAt(i), safeIndex + i);
                 if (inserted != null) { doc.InheritFormatting(safeIndex + i); client.sendInsertChar(inserted); }
             }
             renderDocument(safeIndex + pasted.length());
@@ -1159,7 +1204,7 @@ public class EditorUI {
         java.awt.Toolkit.getDefaultToolkit().getSystemClipboard()
                 .setContents(new StringSelection(sel), null);
         for (int i = end - 1; i >= start; i--) {
-            CharNode deleted = doc.LocalDelete(i);
+            CharNode deleted = globalDelete(i);
             if (deleted != null) client.sendDeleteChar(deleted);
         }
         renderDocument(start);
