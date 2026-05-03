@@ -560,6 +560,9 @@ public class Server extends TextWebSocketHandler {
 // -----------------------------------------------------------------------
     // Database helpers
     // -----------------------------------------------------------------------
+    // -----------------------------------------------------------------------
+    // Database helpers  (drop-in replacement for the same method in Server.java)
+    // -----------------------------------------------------------------------
     private void saveDocument(String editorCode, String ownerUsername,
                               String crdtJson, String docName) {
         if (documentRepository == null) return;
@@ -573,7 +576,7 @@ public class Server extends TextWebSocketHandler {
         if (existing.isPresent()) {
             doc = existing.get();
 
-            // THE FIX: If nothing changed, skip saving a duplicate version
+            // Nothing changed — just update the name if necessary
             if (crdtJson != null && crdtJson.equals(doc.getCrdtJson())) {
                 if (!isBlank(docName) && !docName.equals(doc.getDocumentName())) {
                     doc.setDocumentName(docName);
@@ -585,15 +588,19 @@ public class Server extends TextWebSocketHandler {
             doc = new DocumentEntity(ownerUsername, editorCode, viewerCode, null);
         }
 
-        // 1. Update the document's current text
+        // ── STEP 1: update the live content ─────────────────────────────────
         doc.setCrdtJson(crdtJson);
         if (!isBlank(docName)) doc.setDocumentName(docName);
 
-        // 2. Immediately push this new text into the version history list
+        // ── STEP 2: record this content as a version snapshot ────────────────
+        //   snapshotCurrentVersion() is now null-safe and deduplicates.
+        //   Calling it after setCrdtJson means every distinct save creates
+        //   exactly one retrievable snapshot entry.
         doc.snapshotCurrentVersion();
 
         documentRepository.save(doc);
-        System.out.println("[Server] Document saved for session " + editorCode);
+        System.out.println("[Server] Document saved for session " + editorCode
+                + " — versions: " + doc.getVersions().size());
     }
     // -----------------------------------------------------------------------
     // Relay helpers

@@ -64,19 +64,22 @@ public class DocumentEntity {
     private static final int MAX_VERSIONS = 20;
 
     /**
-     * Snapshots the current crdtJson into the versions list before it is overwritten.
+     * Snapshots the current crdtJson into the versions list.
+     * Call this AFTER setCrdtJson() so each save creates a retrievable snapshot.
      * Trims the list to the most recent MAX_VERSIONS entries.
      */
     public void snapshotCurrentVersion() {
+        // Defensive: MongoDB may return null for a missing/empty array field
+        if (versions == null) versions = new ArrayList<>();
+
         if (crdtJson != null && !crdtJson.isBlank()) {
-            // THE FIX: If the current JSON is identical to the most recent snapshot, DO NOT add it!
+            // Do not add a duplicate of the most recent snapshot
             if (!versions.isEmpty() && versions.get(versions.size() - 1).equals(crdtJson)) {
                 return;
             }
-
             versions.add(crdtJson);
             if (versions.size() > MAX_VERSIONS) {
-                versions.remove(0);           // drop the oldest
+                versions.remove(0);   // drop the oldest
             }
         }
     }
@@ -100,8 +103,12 @@ public class DocumentEntity {
     public String getCrdtJson()                   { return crdtJson; }
     public void   setCrdtJson(String v)           { this.crdtJson = v; }
 
-    public List<String> getVersions()             { return versions; }
-    public void         setVersions(List<String> v){ this.versions = v; }
+    /** Always returns a non-null list; initialises lazily if MongoDB returned null. */
+    public List<String> getVersions() {
+        if (versions == null) versions = new ArrayList<>();
+        return versions;
+    }
+    public void setVersions(List<String> v)       { this.versions = (v != null) ? v : new ArrayList<>(); }
 
     private String documentName = "Untitled";
     public String getDocumentName() { return documentName; }
