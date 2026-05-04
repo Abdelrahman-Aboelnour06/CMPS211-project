@@ -3,6 +3,7 @@ package com.DOCS_ProMax.APT_3ala_barka_el_allah;
 import javax.swing.*;
 import java.awt.*;
 import java.awt.Color;
+import java.util.List;
 
 public class StartScreen {
 
@@ -24,7 +25,8 @@ public class StartScreen {
             BlockCRDT doc = new BlockCRDT(userId, clock);
             BlockNode block = doc.insertTopLevelBlock(new CharCRDT(userId, clock));
 
-            client = new Client("ws://172.20.10.3:8080/collab", doc, clock, block.getId());  client.connectBlocking();
+            client = new Client("ws://localhost:8080/collab", doc, clock, block.getId());
+            client.connectBlocking();
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -94,6 +96,7 @@ public class StartScreen {
         client.setMessageListener(op -> {
             SwingUtilities.invokeLater(() -> {
                 if ("SESSION_CREATED".equals(op.type)) {
+
                     new EditorUI(username, op.sessionCode, client,"Untitled");
                     frame.dispose();
                 } else if ("ERROR".equals(op.type)) {

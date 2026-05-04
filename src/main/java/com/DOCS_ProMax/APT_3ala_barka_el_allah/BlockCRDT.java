@@ -104,6 +104,12 @@ public class BlockCRDT {
     public void deleteNode(BlockID id) {
         BlockNode node = getNode(id);
         if (node == null || node.isDeleted()) return;
+        // FIX: mark all chars inside as deleted so they never leak through fallbacks
+        if (node.getContent() != null) {
+            for (CharNode cn : node.getContent().getOrderedNodes()) {
+                cn.SetDeleted(true);
+            }
+        }
 
         // Locate live neighbours BEFORE we mark the node deleted.
         BlockNode prevLive = findLiveSiblingInDirection(node, -1);
@@ -197,7 +203,7 @@ public class BlockCRDT {
      * Returns the newly created second block, or null if the split is not
      * possible (localIndex ≤ 0 or ≥ chars.size()).
      */
-    public BlockNode splitBlockAtCursor(BlockID blockID, int localIndex) {
+    /*public BlockNode splitBlockAtCursor(BlockID blockID, int localIndex) {
         BlockNode sourceNode = getNode(blockID);
         if (isBlockEmpty(sourceNode)) return null;
 
@@ -213,6 +219,15 @@ public class BlockCRDT {
             checkAndSplit_Merge(newBlock.getId());
         }
         return newBlock;
+    }*/
+    public BlockNode splitBlockAtCursor(BlockID blockID, int localIndex) {
+        BlockNode sourceNode = getNode(blockID);
+        if (isBlockEmpty(sourceNode)) return null;
+
+        List<CharNode> chars = sourceNode.getChars();
+        if (localIndex <= 0 || localIndex > chars.size()) return null;
+
+        return splitBlock(sourceNode, localIndex);
     }
 
     // -----------------------------------------------------------------------
@@ -548,5 +563,16 @@ public class BlockCRDT {
 
     private boolean isBlockEmpty(BlockNode node) {
         return node == null || node.isDeleted() || node.getContent() == null;
+    }
+    public BlockNode insertBlockWithID(BlockID blockID, BlockID parentID, CharCRDT content) {
+        BlockID normalizedParent = normalizeParentID(parentID);
+        BlockNode parentNode = getNode(normalizedParent);
+        if (parentNode == null) parentNode = root;
+
+        BlockNode newNode = new BlockNode(blockID, normalizedParent, content);
+        nodeMap.put(blockID, newNode);
+        parentNode.addChild(newNode);
+        clock.advanceTo(blockID.getClock()); // prevent future ID collision
+        return newNode;
     }
 }

@@ -179,9 +179,23 @@ public class Client extends WebSocketClient {
             // Block operations
             // ------------------------------------------------------------------
 
-            case "INSERT_BLOCK" -> {
+            /*case "INSERT_BLOCK" -> {
                 CharCRDT newCRDT = new CharCRDT(op.blockUser, sharedClock);
                 BlockNode newBlock = localDoc.insertTopLevelBlock(newCRDT);
+                System.out.println("[Client] Remote INSERT_BLOCK applied: " + newBlock.getId());
+            }*/
+
+            // FIXED — replicates the exact same BlockID
+            case "INSERT_BLOCK" -> {
+                BlockID blockID  = new BlockID(op.blockUser, op.blockClock);
+                BlockID parentID = new BlockID(op.parentBlockUser, op.parentBlockClock);
+                sharedClock.advanceTo(op.blockClock);
+                CharCRDT newCRDT = new CharCRDT(op.blockUser, sharedClock);
+                // Restore chars from snapshot if present (handles import replay)
+                if (op.blockSnapshot != null && !op.blockSnapshot.isBlank()) {
+                    newCRDT = CrdtSerializer.fromJson(op.blockSnapshot, op.blockUser);
+                }
+                BlockNode newBlock = localDoc.insertBlockWithID(blockID, parentID, newCRDT);
                 System.out.println("[Client] Remote INSERT_BLOCK applied: " + newBlock.getId());
             }
 

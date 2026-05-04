@@ -816,7 +816,7 @@ public class EditorUI {
      * truth.  We fall back to the single-block Document only when the BlockCRDT
      * has no live blocks at all (legacy / empty-document case).
      */
-    private List<CharNode> getAllVisibleNodes() {
+    /*private List<CharNode> getAllVisibleNodes() {
         List<CharNode> result = new java.util.ArrayList<>();
         List<BlockNode> liveBlocks = client.getLocalDoc().getOrderedNodes();
         for (BlockNode block : liveBlocks) {
@@ -827,6 +827,23 @@ public class EditorUI {
         }
         // Fallback: use the legacy single-block Document when there are no live blocks.
         if (result.isEmpty()) result = doc.GetVisibleNodes();
+        return result;
+    }*/
+
+    private List<CharNode> getAllVisibleNodes() {
+        List<CharNode> result = new java.util.ArrayList<>();
+        List<BlockNode> liveBlocks = client.getLocalDoc().getOrderedNodes();
+        for (BlockNode block : liveBlocks) {
+            if (block.isDeleted() || block.getContent() == null) continue;
+            for (CharNode node : block.getContent().getOrderedNodes()) {
+                if (!node.isDeleted()) result.add(node);
+            }
+        }
+        // FIX: only fall back when there are truly NO live blocks at all
+        // (not just because the live blocks are empty after a delete)
+        if (result.isEmpty() && liveBlocks.isEmpty()) {
+            result = doc.GetVisibleNodes();
+        }
         return result;
     }
 
