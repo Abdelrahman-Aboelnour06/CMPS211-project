@@ -321,6 +321,7 @@ public class Client extends WebSocketClient {
                     System.err.println("[Client] Remote COPY_BLOCK failed for source " + sourceID);
                 }
             }
+// REPLACE the MOVE_BLOCK_EXEC case in Client.java onMessage()
             case "MOVE_BLOCK_EXEC" -> {
                 sharedClock.advanceTo(op.blockClock);
 
@@ -338,7 +339,7 @@ public class Client extends WebSocketClient {
                     }
                 }
 
-                // 2. Rebuild the new block with the exact same ID
+                // 2. Rebuild content from snapshot
                 BlockID newBlockID = new BlockID(op.blockUser, op.blockClock);
                 CharCRDT newCRDT;
                 if (op.blockSnapshot != null && !op.blockSnapshot.isBlank()) {
@@ -347,36 +348,20 @@ public class Client extends WebSocketClient {
                     newCRDT = new CharCRDT(op.blockUser, sharedClock);
                 }
 
-                // 3. Find insert position from anchor ID (stable across peers)
-                int insertPos;
-                if (op.anchorBlockUser == -1 && op.anchorBlockClock == -1) {
-                    // No anchor = insert at very top
-                    insertPos = 0;
-                } else {
-                    BlockID anchorID = new BlockID(op.anchorBlockUser, op.anchorBlockClock);
-                    BlockNode anchorBlock = localDoc.getBlock(anchorID);
-                    if (anchorBlock == null) {
-                        insertPos = localDoc.getRootChildren().size();
-                    } else {
-                        List<BlockNode> rawChildren = localDoc.getRootChildren();
-                        int anchorIdx = rawChildren.indexOf(anchorBlock);
-                        insertPos = (anchorIdx == -1) ? rawChildren.size() : anchorIdx + 1;
-                    }
-                }
+                // 3. Insert after anchor (ghost-safe, no raw index needed)
+                BlockID anchorID = (op.anchorBlockUser == -1 && op.anchorBlockClock == -1)
+                        ? null
+                        : new BlockID(op.anchorBlockUser, op.anchorBlockClock);
 
-                // 4. Insert at anchor-derived position
-                BlockNode newBlock = localDoc.insertBlockAtPosition(
-                        null, newCRDT, insertPos, newBlockID);
+                BlockNode newBlock = localDoc.insertBlockAfterAnchor(anchorID, newCRDT, newBlockID);
 
                 if (newBlock != null) {
                     System.out.println("[Client] MOVE_BLOCK_EXEC: new=" + newBlockID
-                            + " anchor=(" + op.anchorBlockUser + "," + op.anchorBlockClock + ")"
-                            + " pos=" + insertPos);
+                            + " anchor=(" + op.anchorBlockUser + "," + op.anchorBlockClock + ")");
                 } else {
                     System.err.println("[Client] MOVE_BLOCK_EXEC failed: " + newBlockID);
                 }
-            }
-            // ------------------------------------------------------------------
+            }   // ------------------------------------------------------------------
             // Document persistence responses
             // ------------------------------------------------------------------
 

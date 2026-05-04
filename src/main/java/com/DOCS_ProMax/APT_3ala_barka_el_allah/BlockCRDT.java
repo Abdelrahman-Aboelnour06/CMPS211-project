@@ -353,6 +353,7 @@ public class BlockCRDT {
      *
      * @return the newly created block, or null if the source was not found.
      */
+
     public BlockNode copyBlock(BlockID sourceBlockID, BlockID afterBlockID) {
         BlockNode sourceNode = getNode(sourceBlockID);
         if (isBlockEmpty(sourceNode)) return null;
@@ -430,6 +431,52 @@ public class BlockCRDT {
         return created;
     }
 
+    // ADD this method to BlockCRDT.java
+    /**
+     * Inserts a new block immediately AFTER the live block identified by anchorID.
+     * If anchorID is null, inserts at the very beginning (before all live blocks).
+     * Deleted (tombstone) blocks in the children list are ignored when computing position.
+     * This is stable across peers regardless of how many soft-deleted ghosts exist.
+     */
+// ADD this method to BlockCRDT.java
+    /**
+     * Inserts a new block immediately AFTER the live block identified by anchorID.
+     * If anchorID is null, inserts at the very beginning (before all live blocks).
+     * Deleted (tombstone) blocks in the children list are ignored when computing position.
+     * This is stable across peers regardless of how many soft-deleted ghosts exist.
+     */
+    public BlockNode insertBlockAfterAnchor(BlockID anchorID, CharCRDT content) {
+        return insertBlockAfterAnchor(anchorID, content, null);
+    }
+
+    public BlockNode insertBlockAfterAnchor(BlockID anchorID, CharCRDT content,
+                                            BlockID explicitID) {
+        List<BlockNode> raw = root.getChildren();
+
+        int insertPos;
+        if (anchorID == null) {
+            // Insert before the first live block
+            insertPos = 0;
+        } else {
+            BlockNode anchorNode = nodeMap.get(normalizeParentID(anchorID));
+            if (anchorNode == null) {
+                insertPos = raw.size();
+            } else {
+                int rawIdx = raw.indexOf(anchorNode);
+                insertPos = (rawIdx == -1) ? raw.size() : rawIdx + 1;
+            }
+        }
+
+        BlockID   id      = (explicitID != null) ? explicitID : generateID();
+        BlockID   normParent = ROOT_ID;
+        BlockNode newNode = new BlockNode(id, normParent, content);
+        nodeMap.put(id, newNode);
+
+        if (explicitID != null) clock.advanceTo(explicitID.getClock());
+
+        raw.add(insertPos, newNode);
+        return newNode;
+    }
     // -----------------------------------------------------------------------
     // Node access
     // -----------------------------------------------------------------------

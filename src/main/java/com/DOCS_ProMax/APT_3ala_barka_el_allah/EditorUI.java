@@ -168,7 +168,7 @@ public class EditorUI {
                         drawRemoteCursors();
                     }
                     case "INSERT_BLOCK", "DELETE_BLOCK", "SPLIT_BLOCK", "MERGE_BLOCK",
-                         "MOVE_BLOCK", "COPY_BLOCK" -> {
+                         "MOVE_BLOCK", "COPY_BLOCK","MOVE_BLOCK_EXEC" -> {
                         renderDocument(textPane != null ? textPane.getCaretPosition() : 0);
                         drawRemoteCursors();
                         updateRemoteCursorDisplay();
@@ -775,7 +775,7 @@ public class EditorUI {
         // -----------------------------------------------------------------------
         // Insert new block locally at computed position
         // -----------------------------------------------------------------------
-        BlockNode movedBlock = blockDoc.insertBlockAtPosition(null, newContent, insertPos);
+        BlockNode movedBlock = blockDoc.insertBlockAfterAnchor(null, newContent);
         if (movedBlock == null) {
             JOptionPane.showMessageDialog(frame, "Move failed.");
             return;
@@ -866,16 +866,16 @@ public class EditorUI {
             }
         }
 
-        // Insert locally
-        BlockNode pastedBlock = blockDoc.insertBlockAtPosition(
-                null, newContent, insertPos);
+        BlockID anchorID = (activeBlock != null && !activeBlock.isDeleted())
+                ? activeBlockID : null;
+
+        // Insert locally using ghost-safe anchor insert
+        BlockNode pastedBlock = blockDoc.insertBlockAfterAnchor(anchorID, newContent);
         if (pastedBlock == null) {
             JOptionPane.showMessageDialog(frame, "Paste failed."); return;
         }
 
-        BlockID anchorID = (activeBlock != null && !activeBlock.isDeleted())
-                ? activeBlockID : null;
-
+// Send ONE atomic message
         client.sendBeginGroup();
         client.sendMoveBlockExec(pastedBlock, anchorID, null);
         client.sendEndGroup();
