@@ -80,6 +80,7 @@ public class StartScreen {
     }
 
     private void handleCreateSession() {
+        String username = usernameField.getText();
 
         /*SessionJoinResult result = sessionService.createSession(username);
 
@@ -92,12 +93,10 @@ public class StartScreen {
         } else {
             statusLabel.setText(result.message);
         }*/
-        if (!ensureConnected()) return; // Block execution if offline
-
-        String username = usernameField.getText();
         client.setMessageListener(op -> {
             SwingUtilities.invokeLater(() -> {
                 if ("SESSION_CREATED".equals(op.type)) {
+
                     new EditorUI(username, op.sessionCode, client,"Untitled");
                     frame.dispose();
                 } else if ("ERROR".equals(op.type)) {
@@ -105,11 +104,13 @@ public class StartScreen {
                 }
             });
         });
+
         client.createSession(username);
     }
 
     private void handleJoinSession() {
-
+        String username = usernameField.getText();
+        String sessionCode = sessionCodeField.getText();
 
        /* SessionJoinResult result = sessionService.joinSession(username, sessionCode);
 
@@ -122,10 +123,6 @@ public class StartScreen {
         } else {
             statusLabel.setText(result.message);
         }*/
-        if (!ensureConnected()) return; // Block execution if offline
-
-        String username = usernameField.getText();
-        String sessionCode = sessionCodeField.getText();
         client.setMessageListener(op -> {
             SwingUtilities.invokeLater(() -> {
                 if ("SESSION_JOINED".equals(op.type)) {
@@ -136,18 +133,17 @@ public class StartScreen {
                 }
             });
         });
+
         client.joinSession(username, sessionCode);
     }
 
     private void handleMyDocuments() {
-        if (!ensureConnected()) return; // Block execution if offline
-
         String username = usernameField.getText().trim();
         if (username.isEmpty()) {
-            statusLabel.setForeground(Color.RED);
             statusLabel.setText("Enter your username first.");
             return;
         }
+
         client.setMessageListener(op -> {
             SwingUtilities.invokeLater(() -> {
                 if ("DOCS_LIST".equals(op.type)) {
@@ -157,10 +153,11 @@ public class StartScreen {
                 }
             });
         });
+
         Operations listOp = new Operations();
         listOp.type          = "LIST_DOCS";
         listOp.ownerUsername = username;
-        client.sendSafely(listOp.toJson());
+        client.send(listOp.toJson());
     }
 
     private void showDocumentsDialog(String username, String jsonPayload) {
@@ -383,29 +380,5 @@ public class StartScreen {
        // SwingUtilities.invokeLater(StartScreen::new);
         //new StartScreen();
         SwingUtilities.invokeLater(StartScreen::new);
-    }
-    // ADD THIS METHOD: Gateway check before allowing UI actions
-    private boolean ensureConnected() {
-        if (client != null && client.isOpen()) {
-            statusLabel.setForeground(Color.BLACK);
-            return true;
-        }
-
-        // Try to re-establish connection if they just started the server
-        try {
-            statusLabel.setText("Connecting...");
-            if (client != null) {
-                client.reconnectBlocking();
-                if (client.isOpen()) {
-                    statusLabel.setText("Connected!");
-                    statusLabel.setForeground(Color.GREEN);
-                    return true;
-                }
-            }
-        } catch (Exception ignored) {}
-
-        statusLabel.setForeground(Color.RED);
-        statusLabel.setText("Error: Server offline. Start Spring Boot!");
-        return false;
     }
 }

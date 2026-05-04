@@ -323,24 +323,37 @@ public class Client extends WebSocketClient {
     // Session helpers
     // -----------------------------------------------------------------------
 
-    // REPLACE THESE EXISTING METHODS
     public void createSession(String username) {
         this.username = username;
         Operations op = new Operations();
-        op.type = "CREATE_SESSION";
+        op.type     = "CREATE_SESSION";
         op.username = username;
-        sendSafely(op.toJson()); }
+        send(op.toJson());
+    }
 
-
-    public void joinSession(String username, String code) { this.username = username;
+    public void joinSession(String username, String code) {
+        this.username    = username;
         this.sessionCode = code;
         Operations op = new Operations();
-        op.type = "JOIN_SESSION";
-        op.username = username;
+        op.type        = "JOIN_SESSION";
+        op.username    = username;
         op.sessionCode = code;
-        sendSafely(op.toJson()); }
-    public void sendReconnect() { Operations op = new Operations(); op.type = "RECONNECT"; op.username = username; sendSafely(op.toJson()); }
-    public void requestActiveUsers() { Operations op = new Operations(); op.type = "GET_ACTIVE_USERS"; op.sessionCode = sessionCode; sendSafely(op.toJson()); }
+        send(op.toJson());
+    }
+
+    public void sendReconnect() {
+        Operations op = new Operations();
+        op.type     = "RECONNECT";
+        op.username = username;
+        send(op.toJson());
+    }
+
+    public void requestActiveUsers() {
+        Operations op  = new Operations();
+        op.type        = "GET_ACTIVE_USERS";
+        op.sessionCode = sessionCode;
+        send(op.toJson());
+    }
 
     // -----------------------------------------------------------------------
     // Character operation senders
@@ -577,13 +590,6 @@ public class Client extends WebSocketClient {
         op.username    = username;
         op.commentId   = commentId;
         send(op.toJson());
-    }
-    public void sendSafely(String json) {
-        if (isOpen()) {
-            send(json);
-        } else {
-            System.err.println("[Client] Network transmission aborted: WebSocket is disconnected.");
-        }
     }
 
     // -----------------------------------------------------------------------
