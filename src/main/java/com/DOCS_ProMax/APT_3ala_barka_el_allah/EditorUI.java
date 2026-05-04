@@ -775,7 +775,7 @@ public class EditorUI {
         // -----------------------------------------------------------------------
         // Insert new block locally at computed position
         // -----------------------------------------------------------------------
-        BlockNode movedBlock = blockDoc.insertBlockAfterAnchor(anchorID, newContent);
+        BlockNode movedBlock = blockDoc.insertBlockAfterAnchor(null, newContent);
         if (movedBlock == null) {
             JOptionPane.showMessageDialog(frame, "Move failed.");
             return;
