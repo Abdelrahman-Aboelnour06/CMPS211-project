@@ -11,11 +11,7 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
 import java.util.List;
 import java.util.Optional;
 
-/**
- * Central WebSocket message handler.
- * Full Phase 3 implementation including block operations networking,
- * session-level undo/redo (other users' changes), and all spec requirements.
- */
+
 @Component
 public class Server extends TextWebSocketHandler {
 
@@ -27,9 +23,7 @@ public class Server extends TextWebSocketHandler {
 
     private final Gson gson = new Gson();
 
-    // -----------------------------------------------------------------------
-    // Lifecycle
-    // -----------------------------------------------------------------------
+
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) {
@@ -44,9 +38,7 @@ public class Server extends TextWebSocketHandler {
         if (code != null) broadcastActiveUsers(code);
     }
 
-    // -----------------------------------------------------------------------
-    // Message dispatch
-    // -----------------------------------------------------------------------
+
 
     @Override
     protected void handleTextMessage(WebSocketSession session, TextMessage message) {
@@ -56,9 +48,7 @@ public class Server extends TextWebSocketHandler {
 
             switch (op.type) {
 
-                // ==============================================================
-                // SESSION MANAGEMENT
-                // ==============================================================
+              //isa yi connect
 
                 case "CREATE_SESSION" -> {
                     if (isBlank(op.username)) { sendError(session, "Username is required"); return; }
@@ -105,9 +95,7 @@ public class Server extends TextWebSocketHandler {
                     }
                 }
 
-                // ==============================================================
-                // RECONNECTION
-                // ==============================================================
+
 
                 case "RECONNECT" -> {
                     if (isBlank(op.username)) { sendError(session, "Username is required"); return; }
@@ -142,15 +130,13 @@ public class Server extends TextWebSocketHandler {
                     System.out.println("[Server] " + op.username + " reconnected to " + s.getEditorCode());
                 }
 
-                // ==============================================================
-                // CHARACTER CRDT OPERATIONS
-                // ==============================================================
+
 
                 case "INSERT_CHAR", "DELETE_CHAR" -> {
                     if (!sessionManager.isEditor(session)) {
                         sendError(session, "Viewers cannot edit the document"); return;
                     }
-                    // Auto-delete any comment attached to a deleted char
+
                     if ("DELETE_CHAR".equals(op.type) && documentRepository != null) {
                         String code = sessionManager.getSessionCode(session);
                         Optional<DocumentEntity> found = documentRepository.findByEditorCode(code);
@@ -184,9 +170,7 @@ public class Server extends TextWebSocketHandler {
                     relayAndLog(session, message.getPayload(), op, true);
                 }
 
-                // ==============================================================
-                // BLOCK CRDT OPERATIONS  ← NEW
-                // ==============================================================
+
 
                 case "INSERT_BLOCK", "DELETE_BLOCK", "SPLIT_BLOCK", "MERGE_BLOCK",
                      "MOVE_BLOCK", "COPY_BLOCK" , "MOVE_BLOCK_EXEC"-> {
@@ -198,10 +182,7 @@ public class Server extends TextWebSocketHandler {
                             + " relayed in session " + sessionManager.getSessionCode(session));
                 }
 
-                // ==============================================================
-                // UNDO / REDO  (own changes AND other users' changes)
-                // ==============================================================
-
+                //el undo w redo bta3y w bta3 el nas
                 case "UNDO" -> {
                     if (!sessionManager.isEditor(session)) {
                         sendError(session, "Viewers cannot undo"); return;
@@ -241,9 +222,7 @@ public class Server extends TextWebSocketHandler {
                 }
 
 
-                // ==============================================================
-                // CURSOR
-                // ==============================================================
+
 
                 case "CURSOR" -> {
                     String code = sessionManager.getSessionCode(session);
@@ -253,19 +232,13 @@ public class Server extends TextWebSocketHandler {
                     for (WebSocketSession other : others) sendTo(other, payload);
                 }
 
-                // ==============================================================
-                // ACTIVE USERS
-                // ==============================================================
-
+               //kolo yb2a bayen
                 case "GET_ACTIVE_USERS" -> {
                     String code = sessionManager.getSessionCode(session);
                     if (code == null) { sendError(session, "Not in a session"); return; }
                     broadcastActiveUsers(code);
                 }
 
-                // ==============================================================
-                // DATABASE PERSISTENCE
-                // ==============================================================
 
                 case "SAVE_DOC" -> {
                     if (documentRepository == null) { sendError(session, "Database not configured"); return; }
@@ -408,9 +381,7 @@ public class Server extends TextWebSocketHandler {
                     System.out.println("[Server] Document renamed to: " + op.payload.trim());
                 }
 
-                // ==============================================================
-                // VERSION HISTORY
-                // ==============================================================
+
 
 
                 case "GET_VERSIONS" -> {
@@ -432,12 +403,7 @@ public class Server extends TextWebSocketHandler {
 
                     DocumentEntity doc = found.get();
 
-                    // Build a unified list: [snapshot0, snapshot1, ..., liveContent]
-                    // We send a wrapper that carries BOTH the display list AND
-                    // a parallel index list so ROLLBACK_VERSION knows the real index.
-                    // Simplest approach: just send all snapshots + live as one array,
-                    // and ROLLBACK_VERSION will receive the actual JSON content directly
-                    // (not an index) so there is no index mismatch.
+
                     java.util.List<String> allVersions =
                             new java.util.ArrayList<>(doc.getVersions());
                     String live = doc.getCrdtJson();
@@ -474,7 +440,7 @@ public class Server extends TextWebSocketHandler {
 
                     DocumentEntity doc = found.get();
 
-                    // Build the same unified list as GET_VERSIONS so indices match exactly
+
                     java.util.List<String> allVersions =
                             new java.util.ArrayList<>(doc.getVersions());
                     String live = doc.getCrdtJson();
@@ -493,7 +459,7 @@ public class Server extends TextWebSocketHandler {
 
                     String rolledBack = allVersions.get(op.versionIndex);
 
-                    // Snapshot current content before overwriting
+
                     doc.snapshotCurrentVersion();
                     doc.setCrdtJson(rolledBack);
                     documentRepository.save(doc);
@@ -507,9 +473,7 @@ public class Server extends TextWebSocketHandler {
                     System.out.println("[Server] Rolled back to version "
                             + op.versionIndex + " in session " + code);
                 }
-                // ==============================================================
-                // COMMENTS
-                // ==============================================================
+
 
                 case "ADD_COMMENT" -> {
                     if (!sessionManager.isEditor(session)) {
@@ -525,11 +489,11 @@ public class Server extends TextWebSocketHandler {
                             op.endCharUser, op.endCharClock
                     );
 
-                    // Always store in session memory (works without a prior save)
+
                     SessionManager.Session s = sessionManager.getSession(code);
                     if (s != null) s.addSessionComment(c);
 
-                    // Also persist to DB if available and document exists
+
                     if (documentRepository != null) {
                         documentRepository.findByEditorCode(code).ifPresent(doc -> {
                             doc.getComments().add(c);
@@ -569,13 +533,13 @@ public class Server extends TextWebSocketHandler {
                     String code = sessionManager.getSessionCode(session);
                     if (code == null) { sendError(session, "Not in a session"); return; }
 
-                    // Prefer session-memory comments (always up to date, no save needed)
+
                     SessionManager.Session s = sessionManager.getSession(code);
                     java.util.List<Comment> comments = (s != null)
                             ? s.getSessionComments()
                             : new java.util.ArrayList<>();
 
-                    // If session memory is empty, fall back to DB
+
                     if (comments.isEmpty() && documentRepository != null) {
                         Optional<DocumentEntity> found = documentRepository.findByEditorCode(code);
                         if (found.isPresent()) comments = found.get().getComments();
@@ -591,11 +555,11 @@ public class Server extends TextWebSocketHandler {
                     String code = sessionManager.getSessionCode(session);
                     if (code == null) { sendError(session, "Not in a session"); return; }
 
-                    // Resolve in session memory
+
                     SessionManager.Session s = sessionManager.getSession(code);
                     if (s != null) s.resolveSessionComment(op.commentId);
 
-                    // Also resolve in DB if available
+
                     if (documentRepository != null) {
                         documentRepository.findByEditorCode(code).ifPresent(doc -> {
                             doc.getComments().stream()
@@ -625,9 +589,7 @@ public class Server extends TextWebSocketHandler {
                     if (editorCode == null) return;
                     undoRedoManager.endGroup(op.username, editorCode);
                 }
-                // ==============================================================
-                // UNKNOWN
-                // ==============================================================
+
 
                 default -> {
                     sendError(session, "Unknown message type: " + op.type);
@@ -643,21 +605,6 @@ public class Server extends TextWebSocketHandler {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Database helpers
-    // -----------------------------------------------------------------------
-
-    // -----------------------------------------------------------------------
-    // Database helpers
-    // -----------------------------------------------------------------------
-// -----------------------------------------------------------------------
-    // Database helpers
-    // -----------------------------------------------------------------------
-    // -----------------------------------------------------------------------
-    // Database helpers  (drop-in replacement for the same method in Server.java)
-    // -----------------------------------------------------------------------
-// ── FILE: Server.java ────────────────────────────────────────────────────
-// REPLACE saveDocument() entirely
 
     private void saveDocument(String editorCode, String ownerUsername,
                               String crdtJson, String docName) {
@@ -674,7 +621,7 @@ public class Server extends TextWebSocketHandler {
         if (existing.isPresent()) {
             doc = existing.get();
 
-            // Content unchanged — only update name if needed
+
             if (crdtJson.equals(doc.getCrdtJson())) {
                 if (!isBlank(docName) && !docName.equals(doc.getDocumentName())) {
                     doc.setDocumentName(docName);
@@ -683,11 +630,11 @@ public class Server extends TextWebSocketHandler {
                 return;
             }
 
-            // Snapshot the OLD content before overwriting
+
             doc.snapshotCurrentVersion();
 
         } else {
-            // First save — create entity, no previous content to snapshot
+
             String resolvedOwner = !isBlank(ownerUsername)
                     ? ownerUsername : "unknown";
             doc = new DocumentEntity(resolvedOwner, editorCode, viewerCode, null);
@@ -701,14 +648,8 @@ public class Server extends TextWebSocketHandler {
                 + " owner=" + doc.getOwnerUsername()
                 + " versions=" + doc.getVersions().size());
     }
-    // -----------------------------------------------------------------------
-    // Relay helpers
-    // -----------------------------------------------------------------------
 
-    /**
-     * Logs the operation, pushes to undo stacks, buffers for disconnected
-     * clients, relays to all other clients in the session.
-     */
+
     private void relayAndLog(WebSocketSession session, String rawJson,
                              Operations op, boolean trackUndo) {
         String editorCode = sessionManager.getSessionCode(session);
@@ -717,21 +658,20 @@ public class Server extends TextWebSocketHandler {
         SessionManager.Session s = sessionManager.getSession(editorCode);
         s.logOperation(rawJson);
 
-        // Push to per-user AND session-level undo stacks
+
         if (trackUndo && op.username != null) {
             undoRedoManager.push(op.username, op);
             undoRedoManager.pushToSession(editorCode, op);
         }
 
-        // Buffer for disconnected clients
+
         sessionManager.bufferMissedOp(editorCode, rawJson);
 
-        // Relay to peers
+
         for (WebSocketSession other : sessionManager.getOtherClients(session)) {
             sendTo(other, rawJson);
         }
 
-        // Auto-save every 10 operations
         if (s.shouldAutoSave() && documentRepository != null && op.payload != null) {
             saveDocument(editorCode, op.ownerUsername, op.payload,
                     op.documentName != null ? op.documentName : "Untitled");
@@ -745,9 +685,6 @@ public class Server extends TextWebSocketHandler {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Active users broadcast
-    // -----------------------------------------------------------------------
 
     private void broadcastActiveUsers(String editorCode) {
         List<WebSocketSession> clients = sessionManager.getAllClientsInSession(editorCode);
@@ -762,9 +699,6 @@ public class Server extends TextWebSocketHandler {
         System.out.println("[Server] Active users in " + editorCode + ": " + names);
     }
 
-    // -----------------------------------------------------------------------
-    // Low-level send utilities
-    // -----------------------------------------------------------------------
 
     public void sendTo(WebSocketSession session, String json) {
         try {

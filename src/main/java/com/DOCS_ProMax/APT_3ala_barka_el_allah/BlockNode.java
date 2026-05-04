@@ -40,7 +40,7 @@ public class BlockNode {
         return charCRDT.getOrderedNodes();
     }
 
-    // FIX: null check for empty target block
+
     public boolean moveTextFromIndex(BlockNode targetNode, int startIndex) {
         if (targetNode == null || startIndex < 0) return false;
 
@@ -62,7 +62,7 @@ public class BlockNode {
         return true;
     }
 
-    // FIX: null check for empty target block
+
     public boolean moveTextFromLine(BlockNode targetNode, int splitLineCount) {
         int currentLines = 0;
 
@@ -83,7 +83,7 @@ public class BlockNode {
         return true;
     }
 
-    // This was missing — required by BlockCRDT.mergeBlock / deleteNode
+
     public boolean moveAllText(BlockNode targetNode) {
         return this.moveTextFromLine(targetNode, 0);
     }

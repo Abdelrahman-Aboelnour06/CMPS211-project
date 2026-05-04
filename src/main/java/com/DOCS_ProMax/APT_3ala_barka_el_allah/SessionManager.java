@@ -6,39 +6,27 @@ import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.*;
 
-/**
- * Tracks active sessions, connected clients, their roles (editor / viewer),
- * and temporarily disconnected clients (for the Reconnection bonus).
- *
- * Member 2 – Viewer Permissions, Undo/Redo, Reconnection
- * Member 1 – two-code session creation
- */
+
 public class SessionManager {
 
-    // -----------------------------------------------------------------------
-    // Primary maps
-    // -----------------------------------------------------------------------
 
-    /** All active sessions, keyed by their EDITOR code (upper-case). */
+
+
     private final Map<String, Session>          sessions       = new HashMap<>();
 
-    /** editorCode → session  AND  viewerCode → session for fast lookup. */
+
     private final Map<String, Session>          codeIndex      = new HashMap<>();
 
-    /** WebSocket → display name */
+
     private final Map<WebSocketSession, String> clientNames    = new HashMap<>();
 
-    /** WebSocket → editor code of the session this client belongs to */
+
     private final Map<WebSocketSession, String> clientSessions = new HashMap<>();
 
-    /** WebSocket → "editor" | "viewer" */
+
     private final Map<WebSocketSession, String> clientRoles    = new HashMap<>();
 
-    // -----------------------------------------------------------------------
-    // Reconnection support (Member 2 Bonus)
-    // -----------------------------------------------------------------------
 
-    /** username → disconnected client info */
     private final Map<String, DisconnectedClient> disconnectedClients = new ConcurrentHashMap<>();
 
     private final ScheduledExecutorService scheduler =
@@ -46,18 +34,11 @@ public class SessionManager {
 
     private static final long RECONNECT_TIMEOUT_SECONDS = 5 * 60; // 5 minutes
 
-    // -----------------------------------------------------------------------
-    // Session lifecycle
-    // -----------------------------------------------------------------------
 
-    /**
-     * Creates a new session with TWO codes: one for editors and one for viewers.
-     * The creator is always an editor.
-     */
     public Session createSession(WebSocketSession conn, String username) {
         String editorCode = generateCode();
         String viewerCode = generateCode();
-        // Guarantee the two codes are different
+
         while (viewerCode.equals(editorCode)) viewerCode = generateCode();
 
         Session session = new Session(editorCode, viewerCode, username, conn);
@@ -71,12 +52,7 @@ public class SessionManager {
         return session;
     }
 
-    /**
-     * Joins an existing session using either the editor code or the viewer code.
-     * The role is determined by which code was used.
-     *
-     * @param code  The 6-char code provided by the client (editor OR viewer code).
-     */
+
     public Session joinSession(String code, WebSocketSession conn, String username) {
         String upperCode = code.toUpperCase();
         Session session = codeIndex.get(upperCode);
@@ -84,7 +60,6 @@ public class SessionManager {
 
         session.addClient(conn);
 
-        // Determine role
         String role = upperCode.equals(session.getEditorCode()) ? "editor" : "viewer";
 
         clientNames.put(conn, username);
@@ -109,7 +84,8 @@ public class SessionManager {
             }
         }
 
-        // Move to disconnected map instead of full removal (Reconnection bonus)
+
+
         if (username != null && editorCode != null) {
             DisconnectedClient dc = new DisconnectedClient(
                     username, editorCode, clientRoles.getOrDefault(conn, "editor"),
@@ -117,7 +93,7 @@ public class SessionManager {
             );
             disconnectedClients.put(username, dc);
 
-            // Schedule permanent removal after 5 minutes
+
             scheduler.schedule(() -> disconnectedClients.remove(username),
                     RECONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         }
@@ -127,27 +103,15 @@ public class SessionManager {
         clientRoles.remove(conn);
     }
 
-    // -----------------------------------------------------------------------
-    // Reconnection (Member 2 Bonus)
-    // -----------------------------------------------------------------------
-
-    /**
-     * Returns the DisconnectedClient info if the username is still within the
-     * reconnect window, or null otherwise.
-     */
-    public DisconnectedClient getDisconnectedClient(String username) {
+     public DisconnectedClient getDisconnectedClient(String username) {
         return disconnectedClients.get(username);
     }
 
-    /** Call after the client has fully reconnected to purge the disconnected record. */
+
     public void clearDisconnectedClient(String username) {
         disconnectedClients.remove(username);
     }
 
-    /**
-     * Appends a missed operation JSON string to all clients that are currently
-     * in the disconnected map.  Called every time an op is broadcast.
-     */
     public void bufferMissedOp(String sessionEditorCode, String opJson) {
         for (DisconnectedClient dc : disconnectedClients.values()) {
             if (sessionEditorCode.equals(dc.sessionEditorCode)) {
@@ -156,23 +120,14 @@ public class SessionManager {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Role queries (Member 2)
-    // -----------------------------------------------------------------------
 
-    /** Returns true if the given WebSocket connection has "editor" role. */
     public boolean isEditor(WebSocketSession conn) {
         return "editor".equals(clientRoles.get(conn));
     }
 
-    /** Returns the role ("editor" | "viewer") for a connection, or null. */
     public String getRole(WebSocketSession conn) {
         return clientRoles.get(conn);
     }
-
-    // -----------------------------------------------------------------------
-    // Query helpers
-    // -----------------------------------------------------------------------
 
     public List<WebSocketSession> getOtherClients(WebSocketSession sender) {
         String editorCode = clientSessions.get(sender);
@@ -184,7 +139,6 @@ public class SessionManager {
         return others;
     }
 
-    /** Returns the EDITOR code the given connection belongs to, or null. */
     public String getSessionCode(WebSocketSession conn) {
         return clientSessions.get(conn);
     }
@@ -206,14 +160,10 @@ public class SessionManager {
         return new ArrayList<>(session.getClients());
     }
 
-    /** Look up a session by editor OR viewer code. */
+
     public Session getSession(String code) {
         return codeIndex.get(code.toUpperCase());
     }
-
-    // -----------------------------------------------------------------------
-    // Code generation
-    // -----------------------------------------------------------------------
 
     private String generateCode() {
         String chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -223,11 +173,6 @@ public class SessionManager {
         return code.toString();
     }
 
-    // -----------------------------------------------------------------------
-    // Inner classes
-    // -----------------------------------------------------------------------
-
-    /** Holds state for a temporarily disconnected user (Reconnection bonus). */
     public static class DisconnectedClient {
         public final String username;
         public final String sessionEditorCode;
@@ -244,10 +189,6 @@ public class SessionManager {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Inner Session class
-    // -----------------------------------------------------------------------
-
     public static class Session {
         private final String editorCode;
         private final String viewerCode;
@@ -256,11 +197,7 @@ public class SessionManager {
 
 
 
-        /** Operation counter for auto-save (triggers every 10 ops). */
         private int opCount = 0;
-        // ── FILE: SessionManager.java ─────────────────────────────────────────────
-// INSIDE the Session inner class, ADD these comment-storage fields and methods
-// Place them after the existing opCount field
 
         private final java.util.List<Comment> sessionComments = new java.util.ArrayList<>();
 
@@ -302,7 +239,7 @@ public class SessionManager {
         }
         public List<String> getOperationLog()           { return operationLog; }
 
-        /** Returns true every 10th operation (triggers auto-save). */
+
         public boolean shouldAutoSave()                 { return opCount % 10 == 0 && opCount > 0; }
     }
     public Session restoreSession(String editorCode, String viewerCode,

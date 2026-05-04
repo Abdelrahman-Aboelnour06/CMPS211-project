@@ -31,7 +31,6 @@ public class groupin_tester {
         return sb.toString();
     }
 
-    // THE FIX: This method forces the internal clocks to match by artificially ticking them!
     public static void synchronizeLogicalClocks(BlockCRDT user1, BlockCRDT user2, BlockID u1Block, BlockID u2Block) {
         CharCRDT crdt1 = user1.getBlock(u1Block).getContent();
         CharCRDT crdt2 = user2.getBlock(u2Block).getContent();
@@ -164,7 +163,7 @@ public class groupin_tester {
                 turnQ1.add(user1.getBlock(u1Block.getId()).getChars().get(i1 + i));
             }
 
-            // --- USER 2 ---
+
             System.out.print("[User 2] WORD (or '-1'): ");
             String w2 = scanner.nextLine();
             if (w2.equals("-1")) {
@@ -183,7 +182,7 @@ public class groupin_tester {
                 turnQ2.add(user2.getBlock(u2Block.getId()).getChars().get(i2 + i));
             }
 
-            // --- LIVE SYNC ---
+
             for (CharNode n : turnQ1) user2.getBlock(u2Block.getId()).getContent().RemotelyInsertion(n.getID(), n.getParentID(), n.getValue());
             for (CharNode n : turnQ2) user1.getBlock(u1Block.getId()).getContent().RemotelyInsertion(n.getID(), n.getParentID(), n.getValue());
 

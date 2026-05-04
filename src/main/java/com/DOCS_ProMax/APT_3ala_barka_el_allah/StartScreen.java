@@ -15,14 +15,14 @@ public class StartScreen {
    // private DummySessionService sessionService;
     private Client client;
 
-    // REPLACE THIS CONSTRUCTOR
+
     public StartScreen() {
         try {
             Clock clock = new Clock();
             int userId = (int)(System.currentTimeMillis() % 100000);
             BlockCRDT doc = new BlockCRDT(userId, clock);
 
-            // THE FIX: Standardized Genesis Block so all empty documents start with identical IDs
+
             BlockID genesisID = new BlockID(0, 0);
             CharCRDT genesisContent = new CharCRDT(userId, clock);
             BlockNode block = doc.insertBlockWithID(genesisID, null, genesisContent);
@@ -162,7 +162,6 @@ public class StartScreen {
     }
 
     private void showDocumentsDialog(String username, String jsonPayload) {
-        // Parse the JSON array from the server
         java.util.List<com.google.gson.JsonObject> docs = new java.util.ArrayList<>();
         try {
             com.google.gson.JsonArray arr = com.google.gson.JsonParser.parseString(jsonPayload).getAsJsonArray();
@@ -196,7 +195,6 @@ public class StartScreen {
             row.setBorder(BorderFactory.createEmptyBorder(8, 10, 8, 10));
             row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 50));
 
-            //JLabel info = new JLabel("Editor: " + editorCode + "   Viewer: " + viewerCode);
             String docName = doc.has("documentName") && !doc.get("documentName").getAsString().isBlank()
                     ? doc.get("documentName").getAsString()
                     : "Untitled";
@@ -213,14 +211,13 @@ public class StartScreen {
 
                 client.setMessageListener(op -> SwingUtilities.invokeLater(() -> {
                     if ("SESSION_CREATED".equals(op.type)) {
-                        // Session created, now load the saved document content
                         Operations loadOp = new Operations();
                         loadOp.type        = "LOAD_DOC";
                         loadOp.sessionCode = editorCode; // the original editor code from MongoDB
                         client.send(loadOp.toJson());
 
                     } else if ("DOC_LOADED".equals(op.type)) {
-                        // Content loaded, now open the editor and replay it
+
                         CharCRDT crdt = client.getActiveCharCRDT();
                         if (crdt != null && op.payload != null) {
                             CharCRDT loaded = CrdtSerializer.fromJson(op.payload, (int)(System.currentTimeMillis() % 100000));
@@ -240,13 +237,11 @@ public class StartScreen {
                 client.createSession(username);
             });*/
 
-            // REPLACE THIS SPECIFIC BUTTON ACTION
             openBtn.addActionListener(e -> {
                 dialog.dispose();
                 client.setMessageListener(op -> SwingUtilities.invokeLater(() -> {
                     if ("SESSION_CREATED".equals(op.type)) {
 
-                        // THE FIX: Use the new loader to recreate the entire multi-block structure!
                         if (op.payload != null && !op.payload.isBlank()) {
                             CrdtSerializer.loadDocumentJson(op.payload, client.getLocalDoc());
                         }
@@ -282,9 +277,7 @@ public class StartScreen {
                 }
             });
 
-            /*JPanel btns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 5, 0));
-            btns.add(openBtn);
-            btns.add(deleteBtn);*/
+
             JButton renameBtn = new JButton("Rename");
             renameBtn.addActionListener(e -> {
                 String newName = JOptionPane.showInputDialog(dialog,
@@ -295,7 +288,7 @@ public class StartScreen {
                     renameOp.sessionCode = editorCode;
                     renameOp.username    = username;
                     renameOp.payload     = newName.trim();
-                    // Wait for server confirmation BEFORE refreshing the list
+
                     /*client.setMessageListener(op -> SwingUtilities.invokeLater(() -> {
                         if ("DOC_RENAMED".equals(op.type)) {
                             JOptionPane.showMessageDialog(frame,"File renamed to: " + op.payload,
@@ -320,7 +313,7 @@ public class StartScreen {
                                     JOptionPane.INFORMATION_MESSAGE
                             );
                             dialog.dispose();
-                            // Reset listener to handle DOCS_LIST before calling handleMyDocuments
+
                             client.setMessageListener(op2 -> SwingUtilities.invokeLater(() -> {
                                 if ("DOCS_LIST".equals(op2.type)) {
                                     showDocumentsDialog(username, op2.payload);

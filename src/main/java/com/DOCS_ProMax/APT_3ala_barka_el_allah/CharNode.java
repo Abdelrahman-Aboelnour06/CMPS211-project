@@ -21,13 +21,13 @@ public class CharNode {
         this.del = false;
         this.children = new ArrayList<>();
 
-        // Nodes start out as normal, unformatted text by default
+
         this.isBold = false;
         this.isItalic = false;
 
     }
 
-    // --- NEW GETTERS AND SETTERS FOR FORMATTING ---
+    // getters w setters
     public boolean isBold() { return isBold; }
     public void setBold(boolean bold) { this.isBold = bold; }
 

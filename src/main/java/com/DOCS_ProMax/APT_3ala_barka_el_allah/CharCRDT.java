@@ -62,7 +62,6 @@ public class CharCRDT {
         }
     }
 
-    // THE FIX: Exposed full memory state for the Serializer
     public List<CharNode> getAllNodesIncludingDeleted() {
         List<CharNode> result = new ArrayList<>();
         traverseAll(root, result);
@@ -105,7 +104,6 @@ public class CharCRDT {
             CharNode incomingNode = new CharNode(incomingID, parentID, value);
             parent.addChild(incomingNode);
             nodeMap.put(incomingID, incomingNode);
-            // Advance our clock so future local IDs are always greater than any received remote ID
             clock.advanceTo(incomingID.getClock());
             retryPending();
             return incomingNode;
@@ -115,8 +113,6 @@ public class CharCRDT {
             return null;
         }
     }
-    // Keep retrying until no more pending ops can be resolved
-    // REPLACE THIS EXISTING METHOD: Mutually recursive StackOverflow loop severed
     private boolean isRetrying = false;
 
     private void retryPending() {

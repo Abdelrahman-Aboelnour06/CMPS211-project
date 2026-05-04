@@ -1,14 +1,11 @@
 package com.DOCS_ProMax.APT_3ala_barka_el_allah;
 
-/**
- * An automated script to test Member 1's MongoDB database integration.
- * Make sure the Spring Boot server is running before executing this!
- */
+
 public class DBTestClient {
 
     public static void main(String[] args) throws Exception {
 
-        // 1. Setup a dummy CRDT with the word "HI"
+
         Clock clock = new Clock();
         BlockCRDT doc = new BlockCRDT(1, clock);
         BlockNode block = doc.insertTopLevelBlock(new CharCRDT(1, clock));
@@ -19,7 +16,7 @@ public class DBTestClient {
 
         Client client = new Client("ws://localhost:8080/collab", doc, clock, block.getId());
 
-        // Tracking flags to wait for server responses
+
         final String[] sessionCode = {null};
         final boolean[] docSaved = {false};
         final boolean[] docLoaded = {false};
@@ -40,11 +37,11 @@ public class DBTestClient {
             }
         });
 
-        // 2. Connect
+
         client.connectBlocking();
         System.out.println("[DBTest] Connected to WebSocket.");
 
-        // 3. Create Session
+
         System.out.println("[DBTest] Creating session for 'DB_Tester'...");
         client.createSession("DB_Tester");
 
@@ -54,7 +51,6 @@ public class DBTestClient {
         }
         System.out.println("[DBTest] Session created. Editor Code: " + sessionCode[0]);
 
-        // 4. Test SAVE_DOC
         System.out.println("[DBTest] Sending SAVE_DOC to MongoDB...");
         String crdtJson = CrdtSerializer.toJson(charCrdt);
         client.sendSaveDoc(crdtJson);
@@ -62,7 +58,7 @@ public class DBTestClient {
         deadline = System.currentTimeMillis() + 3000;
         while (!docSaved[0] && System.currentTimeMillis() < deadline) Thread.sleep(50);
 
-        // 5. Test LOAD_DOC
+
         System.out.println("[DBTest] Sending LOAD_DOC to fetch it back...");
         Operations loadOp = new Operations();
         loadOp.type = "LOAD_DOC";
@@ -72,7 +68,7 @@ public class DBTestClient {
         deadline = System.currentTimeMillis() + 3000;
         while (!docLoaded[0] && System.currentTimeMillis() < deadline) Thread.sleep(50);
 
-        // 6. Test LIST_DOCS
+
         System.out.println("[DBTest] Sending LIST_DOCS to verify ownership...");
         Operations listOp = new Operations();
         listOp.type = "LIST_DOCS";
@@ -82,12 +78,12 @@ public class DBTestClient {
         deadline = System.currentTimeMillis() + 3000;
         while (!docListed[0] && System.currentTimeMillis() < deadline) Thread.sleep(50);
 
-        // Final Verification
+
         if (docSaved[0] && docLoaded[0] && docListed[0]) {
-            System.out.println("\n🎉 ALL DATABASE TESTS PASSED! MongoDB is working perfectly.");
-            System.out.println("👉 Go refresh MongoDB Compass, and 'collab_editor' will now be there!");
+            System.out.println(" ALL DATABASE TESTS PASSED! MongoDB is working perfectly.");
+            System.out.println(" Go refresh MongoDB Compass, and 'collab_editor' will now be there!");
         } else {
-            System.err.println("\n❌ SOME TESTS FAILED. Check the server console for errors.");
+            System.err.println("\nSOME TESTS FAILED. Check the server console for errors.");
         }
 
         client.closeBlocking();

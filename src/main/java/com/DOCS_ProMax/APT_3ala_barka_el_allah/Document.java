@@ -27,7 +27,7 @@ public class Document {
         return textBuilder.toString();
     }
 
-    // Hands the UI the actual nodes (and filters out the deleted ones!)
+
     public List<CharNode> GetVisibleNodes() {
         List<CharNode> allNodes = crdtInstance.getOrderedNodes();
         List<CharNode> visibleNodes = new ArrayList<>();
@@ -57,7 +57,7 @@ public class Document {
     public void LocalDelete(int index) {
         List<CharNode> NodesList = crdtInstance.getOrderedNodes();
 
-        // Safety check: make sure the index is actually inside the list
+
         if (index >= 0 && index < NodesList.size()) {
             CharNode DeletedNode = NodesList.get(index);
             DeletedNode.SetDeleted(true);
@@ -66,7 +66,7 @@ public class Document {
         }
     }*/
 
-    // LocalInsert that returns the inserted CharNode
+    // Local insert
     public CharNode LocalInsert(char value, int index) {
         List<CharNode> NodesList = crdtInstance.getOrderedNodes();
         CharID parentID;
@@ -78,7 +78,7 @@ public class Document {
         return crdtInstance.insertNode(parentID, value);   // <-- returns CharNode
     }
 
-    //LocalDelete that returns the deleted CharNode
+    //Local delete
     public CharNode LocalDelete(int index) {
         List<CharNode> NodesList = crdtInstance.getOrderedNodes();
         if (index >= 0 && index < NodesList.size()) {
@@ -90,39 +90,39 @@ public class Document {
         return null;
     }
 
-    // Flips the bold or italic switch for a specific range of highlighted text
+
     public void FormatSelection(int startIndex, int endIndex, boolean isBoldAction) {
         List<CharNode> visibleNodes = GetVisibleNodes();
 
-        // Safety check to make sure the user actually highlighted something valid
+
         if (startIndex < 0 || endIndex > visibleNodes.size() || startIndex >= endIndex) {
             return;
         }
 
-        // Loop through only the highlighted nodes
+
         for (int i = startIndex; i < endIndex; i++) {
             CharNode node = visibleNodes.get(i);
 
             if (isBoldAction) {
-                // If it was already bold, un-bold it. Otherwise, make it bold!
+                // switch maben el bold states
                 node.setBold(!node.isBold());
             } else {
-                // If we aren't doing bold, we must be doing italic
+                // ya2ema italic
                 node.setItalic(!node.isItalic());
             }
         }
     }
 
-    // Copies the formatting from the previous letter to the newly typed letter
+
     public void InheritFormatting(int newlyInsertedIndex) {
         List<CharNode> visibleNodes = GetVisibleNodes();
 
-        // Make sure there is actually a letter behind the one we just typed
+
         if (newlyInsertedIndex > 0 && newlyInsertedIndex < visibleNodes.size()) {
             CharNode prevNode = visibleNodes.get(newlyInsertedIndex - 1);
             CharNode newNode = visibleNodes.get(newlyInsertedIndex);
 
-            // Copy the formatting
+
             newNode.setBold(prevNode.isBold());
             newNode.setItalic(prevNode.isItalic());
         }

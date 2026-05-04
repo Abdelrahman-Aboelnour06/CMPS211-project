@@ -9,27 +9,20 @@ public class UndoRedoManager {
 
     private static final int MAX_STACK_SIZE = 50;
 
-    // Each stack entry is a LIST of ops (group). Single ops are lists of size 1.
     private final Map<String, Deque<List<Operations>>> undoStacks = new HashMap<>();
     private final Map<String, Deque<List<Operations>>> redoStacks = new HashMap<>();
     private final Map<String, Deque<List<Operations>>> sessionUndoStacks = new HashMap<>();
     private final Map<String, Deque<List<Operations>>> sessionRedoStacks = new HashMap<>();
 
-    // Grouping state — per username
+
     private final Map<String, List<Operations>> openGroups = new HashMap<>();
     private final Map<String, List<Operations>> openSessionGroups = new HashMap<>();
 
-    // -----------------------------------------------------------------------
-    // Grouping API
-    // -----------------------------------------------------------------------
-
-    /** Start an atomic group for a user. All pushes until endGroup are batched. */
     public void beginGroup(String username, String sessionCode) {
         openGroups.put(username, new ArrayList<>());
         openSessionGroups.put(sessionCode + ":" + username, new ArrayList<>());
     }
 
-    /** End the group and push it as one atomic undo entry. */
     public void endGroup(String username, String sessionCode) {
         List<Operations> group = openGroups.remove(username);
         String key = sessionCode + ":" + username;
@@ -45,12 +38,7 @@ public class UndoRedoManager {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Push
-    // -----------------------------------------------------------------------
-
     public void push(String username, Operations op) {
-        // If a group is open, buffer into it instead of pushing directly
         List<Operations> group = openGroups.get(username);
         if (group != null) { group.add(op); return; }
 
@@ -61,7 +49,6 @@ public class UndoRedoManager {
     }
 
     public void pushToSession(String sessionCode, Operations op) {
-        // Check if any open session group exists for this session
         for (Map.Entry<String, List<Operations>> e : openSessionGroups.entrySet()) {
             if (e.getKey().startsWith(sessionCode + ":")) {
                 e.getValue().add(op);
@@ -73,9 +60,6 @@ public class UndoRedoManager {
         getOrCreate(sessionRedoStacks, sessionCode).clear();
     }
 
-    // -----------------------------------------------------------------------
-    // Undo / Redo – per user
-    // -----------------------------------------------------------------------
 
     public List<Operations> undoGroup(String username) {
         Deque<List<Operations>> undoStack = getOrCreate(undoStacks, username);
@@ -85,7 +69,6 @@ public class UndoRedoManager {
         List<Operations> group = undoStack.pop();
         pushGroup(redoStack, group);
 
-        // Build inverses in REVERSE order
         List<Operations> inverses = new ArrayList<>();
         for (int i = group.size() - 1; i >= 0; i--) {
             Operations inv = buildInverse(group.get(i), username);
@@ -109,10 +92,6 @@ public class UndoRedoManager {
         }
         return reapplied.isEmpty() ? null : reapplied;
     }
-
-    // -----------------------------------------------------------------------
-    // Undo / Redo – session level
-    // -----------------------------------------------------------------------
 
     public List<Operations> undoFromSessionGroup(String sessionCode, String username) {
         Deque<List<Operations>> undoStack = getOrCreate(sessionUndoStacks, sessionCode);
@@ -145,10 +124,6 @@ public class UndoRedoManager {
         }
         return reapplied.isEmpty() ? null : reapplied;
     }
-
-    // -----------------------------------------------------------------------
-    // Legacy single-op API (kept so Server.java old calls still compile)
-    // -----------------------------------------------------------------------
 
     public Operations undo(String username) {
         List<Operations> group = undoGroup(username);
@@ -183,9 +158,6 @@ public class UndoRedoManager {
         return !getOrCreate(sessionRedoStacks, s).isEmpty();
     }
 
-    // -----------------------------------------------------------------------
-    // Helpers
-    // -----------------------------------------------------------------------
 
     private void pushGroup(Deque<List<Operations>> stack, List<Operations> group) {
         stack.push(new ArrayList<>(group));

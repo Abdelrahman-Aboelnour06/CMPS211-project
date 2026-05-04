@@ -7,45 +7,30 @@ import org.springframework.data.mongodb.core.index.Indexed;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * MongoDB document entity that persists a collaborative editing session.
- *
- * Member 1 – Database Persistence & Version History
- */
+
 @Document(collection = "documents")
 public class DocumentEntity {
 
     @Id
     private String id;
 
-    /** Username of the session owner (creator). */
+
     @Indexed
     private String ownerUsername;
 
-    /** 6-character editor code (full access). */
+
     @Indexed(unique = true)
     private String editorCode;
 
-    /** 6-character viewer code (read-only access). */
     @Indexed(unique = true)
     private String viewerCode;
 
-    /**
-     * The serialised CRDT state (JSON string produced by CrdtSerializer).
-     * This is the "current" snapshot of the document.
-     */
+
     private String crdtJson;
 
-    /**
-     * Version history – up to 20 past snapshots.
-     * Index 0 is the oldest, the last element is the most recent snapshot
-     * that was saved BEFORE the current crdtJson was written.
-     */
+
     private List<String> versions = new ArrayList<>();
 
-    // -----------------------------------------------------------------------
-    // Constructors
-    // -----------------------------------------------------------------------
 
     public DocumentEntity() {}
 
@@ -57,21 +42,12 @@ public class DocumentEntity {
         this.crdtJson      = crdtJson;
     }
 
-    // -----------------------------------------------------------------------
-    // Version history helpers
-    // -----------------------------------------------------------------------
-
     private static final int MAX_VERSIONS = 20;
 
-    /**
-     * Snapshots the current crdtJson into the versions list.
-     * Call this AFTER setCrdtJson() so each save creates a retrievable snapshot.
-     * Trims the list to the most recent MAX_VERSIONS entries.
-     */
+
     public void snapshotCurrentVersion() {
         if (versions == null) versions = new ArrayList<>();
-        // NOTE: call this BEFORE setCrdtJson() so we snapshot the OLD content.
-        // The saveDocument() caller is updated accordingly (see Server.java fix).
+
         if (crdtJson != null && !crdtJson.isBlank()) {
             if (!versions.isEmpty() && versions.get(versions.size() - 1).equals(crdtJson)) {
                 return; // deduplicate identical consecutive snapshots
@@ -82,9 +58,7 @@ public class DocumentEntity {
             }
         }
     }
-    // -----------------------------------------------------------------------
-    // Getters / Setters
-    // -----------------------------------------------------------------------
+   //setters w getters
 
     public String getId()                         { return id; }
     public void   setId(String id)                { this.id = id; }
@@ -101,7 +75,7 @@ public class DocumentEntity {
     public String getCrdtJson()                   { return crdtJson; }
     public void   setCrdtJson(String v)           { this.crdtJson = v; }
 
-    /** Always returns a non-null list; initialises lazily if MongoDB returned null. */
+   
     public List<String> getVersions() {
         if (versions == null) versions = new ArrayList<>();
         return versions;

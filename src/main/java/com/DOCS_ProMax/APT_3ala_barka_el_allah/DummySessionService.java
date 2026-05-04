@@ -4,7 +4,6 @@ import java.util.*;
 
 public class DummySessionService {
 
-  //  private static final Map<String, String> sessions = new HashMap<>();
     private static final Map<String, List<String>> sessions = new HashMap<>();
     private static final Map<String, List<SessionUsersListener>> listeners = new HashMap<>();
     private static final Random random = new Random();
