@@ -1,195 +1,203 @@
+// ── FILE: UndoRedoManager.java ───────────────────────────────────────────
+// REPLACE the entire file
+
 package com.DOCS_ProMax.APT_3ala_barka_el_allah;
 
-import java.util.ArrayDeque;
-import java.util.Deque;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
 
-/**
- * Per-user AND per-session undo/redo stack manager.
- *
- * Member 2 – Undo/Redo System
- *
- * Rules:
- *  - Each user has an independent undo stack (max 10) and redo stack (max 10).
- *  - A shared session-level stack allows undoing OTHER users' changes.
- *  - When a new edit is pushed, the user's redo stack is cleared.
- *  - undo() returns the inverse of the last operation so the caller can apply
- *    and broadcast it.
- *  - redo() replays the last undone operation.
- */
 public class UndoRedoManager {
 
-    private static final int MAX_STACK_SIZE = 10;
+    private static final int MAX_STACK_SIZE = 50;
 
-    // Per-user undo stacks
-    private final Map<String, Deque<Operations>> undoStacks = new HashMap<>();
-    // Per-user redo stacks
-    private final Map<String, Deque<Operations>> redoStacks = new HashMap<>();
+    // Each stack entry is a LIST of ops (group). Single ops are lists of size 1.
+    private final Map<String, Deque<List<Operations>>> undoStacks = new HashMap<>();
+    private final Map<String, Deque<List<Operations>>> redoStacks = new HashMap<>();
+    private final Map<String, Deque<List<Operations>>> sessionUndoStacks = new HashMap<>();
+    private final Map<String, Deque<List<Operations>>> sessionRedoStacks = new HashMap<>();
 
-    // Session-level shared undo stack (for undoing other users' changes)
-    private final Map<String, Deque<Operations>> sessionUndoStacks = new HashMap<>();
-    private final Map<String, Deque<Operations>> sessionRedoStacks = new HashMap<>();
+    // Grouping state — per username
+    private final Map<String, List<Operations>> openGroups = new HashMap<>();
+    private final Map<String, List<Operations>> openSessionGroups = new HashMap<>();
 
     // -----------------------------------------------------------------------
-    // Push a new operation (called after every local edit)
+    // Grouping API
     // -----------------------------------------------------------------------
 
-    /**
-     * Records op so it can later be undone by that user.
-     * Also pushes to the shared session stack.
-     */
-    public void push(String username, Operations op) {
-        // Per-user stack
-        Deque<Operations> undoStack = getOrCreate(undoStacks, username);
-        Deque<Operations> redoStack = getOrCreate(redoStacks, username);
+    /** Start an atomic group for a user. All pushes until endGroup are batched. */
+    public void beginGroup(String username, String sessionCode) {
+        openGroups.put(username, new ArrayList<>());
+        openSessionGroups.put(sessionCode + ":" + username, new ArrayList<>());
+    }
 
-        undoStack.push(op);
-        if (undoStack.size() > MAX_STACK_SIZE) {
-            ((ArrayDeque<Operations>) undoStack).pollLast();
+    /** End the group and push it as one atomic undo entry. */
+    public void endGroup(String username, String sessionCode) {
+        List<Operations> group = openGroups.remove(username);
+        String key = sessionCode + ":" + username;
+        List<Operations> sessionGroup = openSessionGroups.remove(key);
+
+        if (group != null && !group.isEmpty()) {
+            pushGroup(getOrCreate(undoStacks, username), group);
+            getOrCreate(redoStacks, username).clear();
         }
+        if (sessionGroup != null && !sessionGroup.isEmpty()) {
+            pushGroup(getOrCreate(sessionUndoStacks, sessionCode), sessionGroup);
+            getOrCreate(sessionRedoStacks, sessionCode).clear();
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Push
+    // -----------------------------------------------------------------------
+
+    public void push(String username, Operations op) {
+        // If a group is open, buffer into it instead of pushing directly
+        List<Operations> group = openGroups.get(username);
+        if (group != null) { group.add(op); return; }
+
+        Deque<List<Operations>> undoStack = getOrCreate(undoStacks, username);
+        Deque<List<Operations>> redoStack = getOrCreate(redoStacks, username);
+        pushGroup(undoStack, Collections.singletonList(op));
         redoStack.clear();
     }
 
-    /**
-     * Pushes to the shared session-level stack so any user can undo it.
-     */
     public void pushToSession(String sessionCode, Operations op) {
-        Deque<Operations> stack = getOrCreate(sessionUndoStacks, sessionCode);
-        stack.push(op);
-        if (stack.size() > MAX_STACK_SIZE) {
-            ((ArrayDeque<Operations>) stack).pollLast();
+        // Check if any open session group exists for this session
+        for (Map.Entry<String, List<Operations>> e : openSessionGroups.entrySet()) {
+            if (e.getKey().startsWith(sessionCode + ":")) {
+                e.getValue().add(op);
+                return;
+            }
         }
-        // Clear session redo when new op arrives
+        Deque<List<Operations>> stack = getOrCreate(sessionUndoStacks, sessionCode);
+        pushGroup(stack, Collections.singletonList(op));
         getOrCreate(sessionRedoStacks, sessionCode).clear();
     }
 
     // -----------------------------------------------------------------------
-    // Undo (user's own changes)
+    // Undo / Redo – per user
+    // -----------------------------------------------------------------------
+
+    public List<Operations> undoGroup(String username) {
+        Deque<List<Operations>> undoStack = getOrCreate(undoStacks, username);
+        Deque<List<Operations>> redoStack = getOrCreate(redoStacks, username);
+        if (undoStack.isEmpty()) return null;
+
+        List<Operations> group = undoStack.pop();
+        pushGroup(redoStack, group);
+
+        // Build inverses in REVERSE order
+        List<Operations> inverses = new ArrayList<>();
+        for (int i = group.size() - 1; i >= 0; i--) {
+            Operations inv = buildInverse(group.get(i), username);
+            if (inv != null) inverses.add(inv);
+        }
+        return inverses.isEmpty() ? null : inverses;
+    }
+
+    public List<Operations> redoGroup(String username) {
+        Deque<List<Operations>> undoStack = getOrCreate(undoStacks, username);
+        Deque<List<Operations>> redoStack = getOrCreate(redoStacks, username);
+        if (redoStack.isEmpty()) return null;
+
+        List<Operations> group = redoStack.pop();
+        pushGroup(undoStack, group);
+
+        List<Operations> reapplied = new ArrayList<>();
+        for (int i = group.size() - 1; i >= 0; i--) {
+            Operations r = buildRedo(group.get(i), username);
+            if (r != null) reapplied.add(r);
+        }
+        return reapplied.isEmpty() ? null : reapplied;
+    }
+
+    // -----------------------------------------------------------------------
+    // Undo / Redo – session level
+    // -----------------------------------------------------------------------
+
+    public List<Operations> undoFromSessionGroup(String sessionCode, String username) {
+        Deque<List<Operations>> undoStack = getOrCreate(sessionUndoStacks, sessionCode);
+        Deque<List<Operations>> redoStack = getOrCreate(sessionRedoStacks, sessionCode);
+        if (undoStack.isEmpty()) return null;
+
+        List<Operations> group = undoStack.pop();
+        pushGroup(redoStack, group);
+
+        List<Operations> inverses = new ArrayList<>();
+        for (int i = group.size() - 1; i >= 0; i--) {
+            Operations inv = buildInverse(group.get(i), username);
+            if (inv != null) inverses.add(inv);
+        }
+        return inverses.isEmpty() ? null : inverses;
+    }
+
+    public List<Operations> redoFromSessionGroup(String sessionCode, String username) {
+        Deque<List<Operations>> undoStack = getOrCreate(sessionUndoStacks, sessionCode);
+        Deque<List<Operations>> redoStack = getOrCreate(sessionRedoStacks, sessionCode);
+        if (redoStack.isEmpty()) return null;
+
+        List<Operations> group = redoStack.pop();
+        pushGroup(undoStack, group);
+
+        List<Operations> reapplied = new ArrayList<>();
+        for (int i = group.size() - 1; i >= 0; i--) {
+            Operations r = buildRedo(group.get(i), username);
+            if (r != null) reapplied.add(r);
+        }
+        return reapplied.isEmpty() ? null : reapplied;
+    }
+
+    // -----------------------------------------------------------------------
+    // Legacy single-op API (kept so Server.java old calls still compile)
     // -----------------------------------------------------------------------
 
     public Operations undo(String username) {
-        Deque<Operations> undoStack = getOrCreate(undoStacks, username);
-        Deque<Operations> redoStack = getOrCreate(redoStacks, username);
-
-        if (undoStack.isEmpty()) return null;
-
-        Operations original = undoStack.pop();
-        redoStack.push(original);
-        if (redoStack.size() > MAX_STACK_SIZE) {
-            ((ArrayDeque<Operations>) redoStack).pollLast();
-        }
-
-        return buildInverse(original, username);
+        List<Operations> group = undoGroup(username);
+        return (group != null && !group.isEmpty()) ? group.get(0) : null;
     }
-
-    // -----------------------------------------------------------------------
-    // Redo (user's own changes)
-    // -----------------------------------------------------------------------
 
     public Operations redo(String username) {
-        Deque<Operations> undoStack = getOrCreate(undoStacks, username);
-        Deque<Operations> redoStack = getOrCreate(redoStacks, username);
-
-        if (redoStack.isEmpty()) return null;
-
-        Operations original = redoStack.pop();
-        undoStack.push(original);
-        if (undoStack.size() > MAX_STACK_SIZE) {
-            ((ArrayDeque<Operations>) undoStack).pollLast();
-        }
-
-        Operations redo = new Operations();
-        redo.sessionCode = original.sessionCode;
-        redo.username = username;
-
-        if ("INSERT_CHAR".equals(original.type)) {
-            redo.type = "UNDELETE_CHAR";
-            redo.charUser = original.charUser;
-            redo.charClock = original.charClock;
-            return redo;
-        }
-
-        return copyWithUsername(original, username);
+        List<Operations> group = redoGroup(username);
+        return (group != null && !group.isEmpty()) ? group.get(0) : null;
     }
 
-    // -----------------------------------------------------------------------
-    // Undo from shared session stack (undoes any user's change)
-    // -----------------------------------------------------------------------
-
-    public Operations undoFromSession(String sessionCode, String requesterUsername) {
-        Deque<Operations> undoStack = getOrCreate(sessionUndoStacks, sessionCode);
-        Deque<Operations> redoStack = getOrCreate(sessionRedoStacks, sessionCode);
-
-        if (undoStack.isEmpty()) return null;
-
-        Operations original = undoStack.pop();
-        redoStack.push(original);
-        if (redoStack.size() > MAX_STACK_SIZE) {
-            ((ArrayDeque<Operations>) redoStack).pollLast();
-        }
-
-        return buildInverse(original, requesterUsername);
+    public Operations undoFromSession(String sessionCode, String username) {
+        List<Operations> group = undoFromSessionGroup(sessionCode, username);
+        return (group != null && !group.isEmpty()) ? group.get(0) : null;
     }
 
-    // -----------------------------------------------------------------------
-    // Redo from shared session stack
-    // -----------------------------------------------------------------------
-
-    public Operations redoFromSession(String sessionCode, String requesterUsername) {
-        Deque<Operations> undoStack = getOrCreate(sessionUndoStacks, sessionCode);
-        Deque<Operations> redoStack = getOrCreate(sessionRedoStacks, sessionCode);
-
-        if (redoStack.isEmpty()) return null;
-
-        Operations original = redoStack.pop();
-        undoStack.push(original);
-        if (undoStack.size() > MAX_STACK_SIZE) {
-            ((ArrayDeque<Operations>) undoStack).pollLast();
-        }
-
-        if ("INSERT_CHAR".equals(original.type)) {
-            Operations redo = new Operations();
-            redo.type = "UNDELETE_CHAR";
-            redo.sessionCode = original.sessionCode;
-            redo.username = requesterUsername;
-            redo.charUser = original.charUser;
-            redo.charClock = original.charClock;
-            return redo;
-        }
-
-        return copyWithUsername(original, requesterUsername);
+    public Operations redoFromSession(String sessionCode, String username) {
+        List<Operations> group = redoFromSessionGroup(sessionCode, username);
+        return (group != null && !group.isEmpty()) ? group.get(0) : null;
     }
-
-    // -----------------------------------------------------------------------
-    // Stack size queries
-    // -----------------------------------------------------------------------
 
     public boolean canUndo(String username) {
         return !getOrCreate(undoStacks, username).isEmpty();
     }
-
     public boolean canRedo(String username) {
         return !getOrCreate(redoStacks, username).isEmpty();
     }
-
-    public boolean canUndoSession(String sessionCode) {
-        return !getOrCreate(sessionUndoStacks, sessionCode).isEmpty();
+    public boolean canUndoSession(String s) {
+        return !getOrCreate(sessionUndoStacks, s).isEmpty();
     }
-
-    public boolean canRedoSession(String sessionCode) {
-        return !getOrCreate(sessionRedoStacks, sessionCode).isEmpty();
+    public boolean canRedoSession(String s) {
+        return !getOrCreate(sessionRedoStacks, s).isEmpty();
     }
 
     // -----------------------------------------------------------------------
-    // Internal helpers
+    // Helpers
     // -----------------------------------------------------------------------
+
+    private void pushGroup(Deque<List<Operations>> stack, List<Operations> group) {
+        stack.push(new ArrayList<>(group));
+        while (stack.size() > MAX_STACK_SIZE) {
+            ((ArrayDeque<List<Operations>>) stack).pollLast();
+        }
+    }
 
     private Operations buildInverse(Operations original, String username) {
         Operations inv = new Operations();
         inv.sessionCode = original.sessionCode;
         inv.username    = username;
-
         switch (original.type) {
             case "INSERT_CHAR" -> {
                 inv.type       = "DELETE_CHAR";
@@ -207,11 +215,11 @@ public class UndoRedoManager {
                 inv.isItalic    = original.isItalic;
             }
             case "FORMAT_CHAR" -> {
-                inv.type       = "FORMAT_CHAR";
-                inv.charUser   = original.charUser;
-                inv.charClock  = original.charClock;
-                inv.isBold     = !original.isBold;
-                inv.isItalic   = !original.isItalic;
+                inv.type     = "FORMAT_CHAR";
+                inv.charUser  = original.charUser;
+                inv.charClock = original.charClock;
+                inv.isBold    = !original.isBold;
+                inv.isItalic  = !original.isItalic;
             }
             case "INSERT_BLOCK" -> {
                 inv.type       = "DELETE_BLOCK";
@@ -219,18 +227,29 @@ public class UndoRedoManager {
                 inv.blockClock = original.blockClock;
             }
             case "DELETE_BLOCK" -> {
-                inv.type = "INSERT_BLOCK";
-                inv.blockUser = original.blockUser;
-                inv.blockClock = original.blockClock;
-                inv.parentBlockUser = original.parentBlockUser;
+                inv.type             = "INSERT_BLOCK";
+                inv.blockUser        = original.blockUser;
+                inv.blockClock       = original.blockClock;
+                inv.parentBlockUser  = original.parentBlockUser;
                 inv.parentBlockClock = original.parentBlockClock;
-                inv.blockSnapshot = original.blockSnapshot;  // crucial: carry the content
+                inv.blockSnapshot    = original.blockSnapshot;
             }
-            default -> {
-                return copyWithUsername(original, username);
-            }
+            default -> { return copyWithUsername(original, username); }
         }
         return inv;
+    }
+
+    private Operations buildRedo(Operations original, String username) {
+        if ("INSERT_CHAR".equals(original.type)) {
+            Operations r = new Operations();
+            r.type       = "UNDELETE_CHAR";
+            r.sessionCode = original.sessionCode;
+            r.username   = username;
+            r.charUser   = original.charUser;
+            r.charClock  = original.charClock;
+            return r;
+        }
+        return copyWithUsername(original, username);
     }
 
     private Operations copyWithUsername(Operations src, String username) {
@@ -249,11 +268,12 @@ public class UndoRedoManager {
         copy.blockClock       = src.blockClock;
         copy.parentBlockUser  = src.parentBlockUser;
         copy.parentBlockClock = src.parentBlockClock;
-        copy.blockSnapshot = src.blockSnapshot;
+        copy.blockSnapshot    = src.blockSnapshot;
         return copy;
     }
 
-    private Deque<Operations> getOrCreate(Map<String, Deque<Operations>> map, String key) {
+    private Deque<List<Operations>> getOrCreate(
+            Map<String, Deque<List<Operations>>> map, String key) {
         return map.computeIfAbsent(key, k -> new ArrayDeque<>());
     }
 }

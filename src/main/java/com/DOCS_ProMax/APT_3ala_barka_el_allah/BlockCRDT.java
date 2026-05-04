@@ -225,11 +225,25 @@ public class BlockCRDT {
         if (isBlockEmpty(sourceNode)) return null;
 
         List<CharNode> chars = sourceNode.getChars();
-        if (localIndex <= 0 || localIndex > chars.size()) return null;
+        // Allow split at 0 (everything moves to new block) up to chars.size()
+        if (localIndex < 0 || localIndex > chars.size()) return null;
 
         return splitBlock(sourceNode, localIndex);
     }
+    public BlockNode insertBlockAtPosition(BlockID parentID, CharCRDT content, int position) {
+        BlockID   normalizedParent = normalizeParentID(parentID);
+        BlockNode parentNode       = getNode(normalizedParent);
+        if (parentNode == null) parentNode = root;
 
+        BlockID   id      = generateID();
+        BlockNode newNode = new BlockNode(id, normalizedParent, content);
+        nodeMap.put(id, newNode);
+
+        List<BlockNode> children = parentNode.getChildren();
+        int clampedPos = Math.max(0, Math.min(position, children.size()));
+        children.add(clampedPos, newNode);   // direct insert, no sort
+        return newNode;
+    }
     // -----------------------------------------------------------------------
     // Merge helpers
     // -----------------------------------------------------------------------
@@ -276,25 +290,21 @@ public class BlockCRDT {
      */
     public BlockNode moveBlock(BlockID blockID, BlockID afterBlockID) {
         BlockNode sourceNode = getNode(blockID);
-        if (sourceNode == null || sourceNode.isDeleted()) return null;
+        if (sourceNode == null | sourceNode.isDeleted()) return null;
 
-        // Locate the source node's current parent.
         BlockNode oldParent = findParentOf(sourceNode);
         if (oldParent == null) oldParent = root;
 
-        // ── Determine new parent and insertion index ──────────────────────
         BlockNode newParent;
         int insertIdx;
 
         if (afterBlockID == null) {
-            // Move to the very top of root's children.
-            newParent = root;
-            insertIdx = 0;
+            newParent  = root;
+            insertIdx  = 0;
         } else {
             BlockNode afterNode = getNode(afterBlockID);
-            if (afterNode == null || afterNode.isDeleted()) return null;
+            if (afterNode == null | afterNode.isDeleted()) return null;
 
-            // New parent is the same as afterNode's parent.
             BlockNode afterParent = findParentOf(afterNode);
             newParent = (afterParent != null) ? afterParent : root;
 
@@ -304,20 +314,15 @@ public class BlockCRDT {
             insertIdx = idx + 1;
         }
 
-        // ── Detach from old parent ─────────────────────────────────────────
-        // (Do NOT touch nodeMap – the node keeps the same BlockID.)
+        // Detach from old parent
         oldParent.getChildren().remove(sourceNode);
 
-        // ── Guard: clamp insertIdx in case detachment shrank the list ─────
+        // Clamp insertIdx after detachment (list may have shrunk)
         List<BlockNode> siblings = newParent.getChildren();
         if (insertIdx > siblings.size()) insertIdx = siblings.size();
 
-        // ── Re-attach at the new position ─────────────────────────────────
+        // Re-attach at the exact requested position – NO SORT (sort would undo the move)
         siblings.add(insertIdx, sourceNode);
-
-        // Re-sort so concurrent moves converge deterministically
-        // (same ordering rule as addChild).
-        siblings.sort(Comparator.comparing(BlockNode::getId));
 
         return sourceNode;
     }
@@ -589,5 +594,38 @@ public class BlockCRDT {
             traverseAllBlocks(child, result);
         }
     }
+// ── FILE: BlockCRDT.java ─────────────────────────────────────────────────
+// ADD both methods anywhere in the public section of BlockCRDT.java
+// (they do NOT replace anything — just add them)
 
+    /**
+     * Returns the raw children list of root including deleted nodes.
+     * Required for precise positional insertion during move operations.
+     * getOrderedNodes() only returns live nodes — this returns everything.
+     */
+    public List<BlockNode> getRootChildren() {
+        return root.getChildren();
+    }
+
+    /**
+     * Marks a block deleted WITHOUT triggering neighbour merge/split checks.
+     * Use for move operations where the block's content has already been
+     * copied elsewhere and we just want to hide the original.
+     *
+     * Compare with deleteNode() which calls checkAndSplit_Merge on neighbours
+     * — that can cause the newly inserted copy to get auto-merged and vanish
+     * if it has fewer than MIN_LINES (2) lines.
+     */
+    public void softDeleteNode(BlockID id) {
+        BlockNode node = getNode(id);
+        if (node == null || node.isDeleted()) return;
+        // Mark all chars deleted so they never leak through fallbacks
+        if (node.getContent() != null) {
+            for (CharNode cn : node.getContent().getOrderedNodes()) {
+                cn.SetDeleted(true);
+            }
+        }
+        node.setDeleted(true);
+        // Intentionally no checkAndSplit_Merge call
+    }
 }

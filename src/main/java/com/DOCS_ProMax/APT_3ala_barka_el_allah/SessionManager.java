@@ -254,8 +254,34 @@ public class SessionManager {
         private final List<WebSocketSession> clients      = new ArrayList<>();
         private final List<String>           operationLog = new ArrayList<>();
 
+
+
         /** Operation counter for auto-save (triggers every 10 ops). */
         private int opCount = 0;
+        // ── FILE: SessionManager.java ─────────────────────────────────────────────
+// INSIDE the Session inner class, ADD these comment-storage fields and methods
+// Place them after the existing opCount field
+
+        private final java.util.List<Comment> sessionComments = new java.util.ArrayList<>();
+
+        public java.util.List<Comment> getSessionComments() { return sessionComments; }
+
+        public void addSessionComment(Comment c) {
+            sessionComments.add(c);
+        }
+
+        public boolean removeSessionComment(String commentId) {
+            return sessionComments.removeIf(c -> c.id.equals(commentId));
+        }
+
+        public void resolveSessionComment(String commentId) {
+            sessionComments.stream()
+                    .filter(c -> c.id.equals(commentId))
+                    .findFirst()
+                    .ifPresent(c -> c.resolved = true);
+        }
+
+
 
         public Session(String editorCode, String viewerCode,
                        String ownerName, WebSocketSession owner) {

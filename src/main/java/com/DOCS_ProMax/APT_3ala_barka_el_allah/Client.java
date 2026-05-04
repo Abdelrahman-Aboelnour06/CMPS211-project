@@ -686,6 +686,28 @@ public class Client extends WebSocketClient {
             System.err.println("[Client] Network transmission aborted: WebSocket is disconnected.");
         }
     }
+
+    // ── FILE: Client.java ────────────────────────────────────────────────────
+// ADD these two methods
+
+    public void sendBeginGroup() {
+        if (!isOpen()) return;
+        Operations op  = new Operations();
+        op.type        = "BEGIN_GROUP";
+        op.sessionCode = sessionCode;
+        op.username    = username;
+        send(op.toJson());
+    }
+
+    public void sendEndGroup() {
+        if (!isOpen()) return;
+        Operations op  = new Operations();
+        op.type        = "END_GROUP";
+        op.sessionCode = sessionCode;
+        op.username    = username;
+        send(op.toJson());
+    }
+
     // -----------------------------------------------------------------------
     // Getters / setters
     // -----------------------------------------------------------------------

@@ -69,21 +69,19 @@ public class DocumentEntity {
      * Trims the list to the most recent MAX_VERSIONS entries.
      */
     public void snapshotCurrentVersion() {
-        // Defensive: MongoDB may return null for a missing/empty array field
         if (versions == null) versions = new ArrayList<>();
-
+        // NOTE: call this BEFORE setCrdtJson() so we snapshot the OLD content.
+        // The saveDocument() caller is updated accordingly (see Server.java fix).
         if (crdtJson != null && !crdtJson.isBlank()) {
-            // Do not add a duplicate of the most recent snapshot
             if (!versions.isEmpty() && versions.get(versions.size() - 1).equals(crdtJson)) {
-                return;
+                return; // deduplicate identical consecutive snapshots
             }
             versions.add(crdtJson);
             if (versions.size() > MAX_VERSIONS) {
-                versions.remove(0);   // drop the oldest
+                versions.remove(0);
             }
         }
     }
-
     // -----------------------------------------------------------------------
     // Getters / Setters
     // -----------------------------------------------------------------------
