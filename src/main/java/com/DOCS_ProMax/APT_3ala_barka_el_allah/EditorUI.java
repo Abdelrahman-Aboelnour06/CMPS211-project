@@ -141,54 +141,42 @@ public class EditorUI {
                         }
                     }
                     case "VERSIONS_LIST" -> showVersionsDialog(op.payload);
-//                    case "DOC_LOADED" -> {
-//                        if (op.payload != null && !op.payload.isBlank()) {
-//                            CharCRDT crdt = client.getActiveCharCRDT();
-//                            if (crdt != null) {
-//                                for (CharNode n : doc.GetVisibleNodes()) n.SetDeleted(true);
-//                                CharCRDT loaded = CrdtSerializer.fromJson(op.payload, 1);
-//                                CharID lastParent = crdt.rootID;
-//                                for (CharNode loadedNode : loaded.getOrderedNodes()) {
-//                                    CharNode existing = crdt.getNode(loadedNode.getID());
-//                                    if (existing != null) {
-//                                        existing.SetDeleted(false);
-//                                        existing.setBold(loadedNode.isBold());
-//                                        existing.setItalic(loadedNode.isItalic());
-//                                        lastParent = existing.getID();
-//                                    } else {
-//                                        CharNode inserted = crdt.RemotelyInsertion(
-//                                                loadedNode.getID(), lastParent, loadedNode.getValue()
-//                                        );
-//                                        if (inserted != null) {
-//                                            inserted.setBold(loadedNode.isBold());
-//                                            inserted.setItalic(loadedNode.isItalic());
-//                                            inserted.SetDeleted(false);
-//                                            lastParent = inserted.getID();
-//                                        }
-//                                    }
-//                                }
-//                            }
-//                        }
-//                        renderDocument(0);
-//                        drawRemoteCursors();
-//                    }
-                    // FIX: Block ops from remote peers must also refresh the editor.
+                    case "DOC_LOADED" -> {
+                        if (op.payload != null && !op.payload.isBlank()) {
+                            CharCRDT crdt = client.getActiveCharCRDT();
+                            if (crdt != null) {
+                                for (CharNode n : doc.GetVisibleNodes()) n.SetDeleted(true);
+                                CharCRDT loaded = CrdtSerializer.fromJson(op.payload, 1);
+                                CharID lastParent = crdt.rootID;
+                                for (CharNode loadedNode : loaded.getOrderedNodes()) {
+                                    CharNode existing = crdt.getNode(loadedNode.getID());
+                                    if (existing != null) {
+                                        existing.SetDeleted(false);
+                                        existing.setBold(loadedNode.isBold());
+                                        existing.setItalic(loadedNode.isItalic());
+                                        lastParent = existing.getID();
+                                    } else {
+                                        CharNode inserted = crdt.RemotelyInsertion(
+                                                loadedNode.getID(), lastParent, loadedNode.getValue()
+                                        );
+                                        if (inserted != null) {
+                                            inserted.setBold(loadedNode.isBold());
+                                            inserted.setItalic(loadedNode.isItalic());
+                                            inserted.SetDeleted(false);
+                                            lastParent = inserted.getID();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        renderDocument(0);
+                        drawRemoteCursors();
+                    }
                     case "INSERT_BLOCK", "DELETE_BLOCK", "SPLIT_BLOCK", "MERGE_BLOCK",
                          "MOVE_BLOCK", "COPY_BLOCK" -> {
                         renderDocument(textPane != null ? textPane.getCaretPosition() : 0);
                         drawRemoteCursors();
                         updateRemoteCursorDisplay();
-                    }
-                    // REPLACE THIS SWITCH CASE
-                    case "DOC_LOADED" -> {
-                        if (op.payload != null && !op.payload.isBlank()) {
-                            // THE FIX: Load entire multi-block document structure
-                            CrdtSerializer.loadDocumentJson(op.payload, client.getLocalDoc());
-                            List<BlockNode> blocks = client.getLocalDoc().getOrderedNodes();
-                            if (!blocks.isEmpty()) client.setActiveBlockID(blocks.get(0).getId());
-                        }
-                        renderDocument(0);
-                        drawRemoteCursors();
                     }
                 }
             });
@@ -368,18 +356,19 @@ public class EditorUI {
                     CharNode inserted = globalInsert('\n', safeIndex);
                     if (inserted != null) client.sendInsertChar(inserted);
                     shiftRemoteCursors(safeIndex, +1);
-                    // Check if the active block now exceeds MAX_LINES and split if so.
+
+                    // Auto-split if the active block exceeds MAX_LINES.
                     BlockID activeBlock = client.getActiveBlockID();
-                    if (activeBlock != null) {
+                    if (activeBlock != null && inserted != null) {
                         BlockNode blockNode = client.getLocalDoc().getBlock(activeBlock);
                         if (blockNode != null && blockNode.getLineCount() > MAX_LINES_PER_BLOCK) {
-                            // Compute the local index of the inserted '\n' within the block.
                             int localIndex = computeLocalIndex(activeBlock, inserted);
                             if (localIndex > 0) {
-                                BlockNode newBlock = client.getLocalDoc().splitBlockAtCursor(activeBlock, localIndex);
+                                // FIX: capture newBlock and send its ID over the wire
+                                BlockNode newBlock = client.getLocalDoc()
+                                        .splitBlockAtCursor(activeBlock, localIndex);
                                 if (newBlock != null) {
-                                    client.sendSplitBlock(activeBlock, localIndex);
-                                    // FIX: Update active block to the newly created block.
+                                    client.sendSplitBlock(activeBlock, newBlock, localIndex);
                                     client.setActiveBlockID(newBlock.getId());
                                 }
                             }
@@ -418,26 +407,21 @@ public class EditorUI {
     }
 
     // =========================================================================
-    // Helper: compute the LOCAL index of a CharNode within its block
+    // Helper: compute LOCAL index of a CharNode inside its block
     // =========================================================================
     /**
-     * Given a CharNode that was just inserted into the document, returns its
-     * position within the visible character list of the block it belongs to.
-     * Returns -1 if not found.
+     * Returns the visible-character position of {@code target} within its block.
+     * "Visible" means non-deleted.  Used to compute the split index after an
+     * auto-split triggered by pressing Enter.
      */
     private int computeLocalIndex(BlockID blockID, CharNode target) {
         BlockNode block = client.getLocalDoc().getBlock(blockID);
         if (block == null || block.getContent() == null) return -1;
         List<CharNode> chars = block.getContent().getOrderedNodes();
-        for (int i = 0; i < chars.size(); i++) {
-            if (!chars.get(i).isDeleted() && chars.get(i).getID().equals(target.getID())) {
-                // Count only visible chars up to this point for the local index.
-                int visible = 0;
-                for (int j = 0; j < i; j++) {
-                    if (!chars.get(j).isDeleted()) visible++;
-                }
-                return visible;
-            }
+        int visible = 0;
+        for (CharNode cn : chars) {
+            if (cn.getID().equals(target.getID())) return visible;
+            if (!cn.isDeleted()) visible++;
         }
         return -1;
     }
@@ -490,19 +474,23 @@ public class EditorUI {
             JPanel row = new JPanel(new BorderLayout(10, 0));
             row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 52));
             row.setBorder(BorderFactory.createCompoundBorder(
-                    BorderFactory.createMatteBorder(0, 3, 0, 0, (i == versions.size() - 1) ? new Color(0, 120, 180) : new Color(160, 160, 160)),
+                    BorderFactory.createMatteBorder(0, 3, 0, 0,
+                            (i == versions.size() - 1) ? new Color(0, 120, 180) : new Color(160, 160, 160)),
                     BorderFactory.createEmptyBorder(8, 10, 8, 8)
             ));
             row.setBackground(i % 2 == 0 ? UIManager.getColor("Panel.background") : new Color(245, 248, 252));
-            JLabel infoLabel = new JLabel("<html><b>Version " + versionNumber + "</b>" + (i == versions.size() - 1 ? " (most recent)" : "") + "<br><font color='gray' size='2'>" + preview + "</font></html>");
+            JLabel infoLabel = new JLabel("<html><b>Version " + versionNumber + "</b>"
+                    + (i == versions.size() - 1 ? " (most recent)" : "")
+                    + "<br><font color='gray' size='2'>" + preview + "</font></html>");
             infoLabel.setFont(new Font("Segoe UI", Font.PLAIN, 12));
             JButton restoreBtn = new JButton("Restore");
             restoreBtn.setFont(new Font("Segoe UI", Font.BOLD, 12));
             restoreBtn.setFocusable(false);
             restoreBtn.setEnabled(client.isEditor());
-            restoreBtn.setToolTipText(client.isEditor() ? "Roll back the document to this version" : "Only editors can restore versions");
             restoreBtn.addActionListener(ev -> {
-                int confirm = JOptionPane.showConfirmDialog(dialog, "Restore Version " + versionNumber + "?\n\nThis will overwrite the current document for ALL collaborators.",
+                int confirm = JOptionPane.showConfirmDialog(dialog,
+                        "Restore Version " + versionNumber
+                                + "?\n\nThis will overwrite the current document for ALL collaborators.",
                         "Confirm Restore", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
                 if (confirm != JOptionPane.YES_OPTION) return;
                 String sc = client.getEditorCode() != null ? client.getEditorCode() : client.getSessionCode();
@@ -513,7 +501,8 @@ public class EditorUI {
                 rollback.username = username;
                 client.send(rollback.toJson());
                 dialog.dispose();
-                JOptionPane.showMessageDialog(frame, "Version " + versionNumber + " restored.", "Restored", JOptionPane.INFORMATION_MESSAGE);
+                JOptionPane.showMessageDialog(frame, "Version " + versionNumber + " restored.", "Restored",
+                        JOptionPane.INFORMATION_MESSAGE);
             });
             row.add(infoLabel, BorderLayout.CENTER);
             row.add(restoreBtn, BorderLayout.EAST);
@@ -536,29 +525,24 @@ public class EditorUI {
         dialog.setVisible(true);
     }
 
-    // REPLACE THIS METHOD
     private String buildVersionPreview(String crdtJson) {
         if (crdtJson == null || crdtJson.isBlank()) return "(empty)";
         try {
-            BlockCRDT tempDoc = new BlockCRDT(0, new Clock());
-            CrdtSerializer.loadDocumentJson(crdtJson, tempDoc);
+            CharCRDT crdt = CrdtSerializer.fromJson(crdtJson, (int)(System.currentTimeMillis() % 100000));
             StringBuilder sb = new StringBuilder();
-            for (BlockNode bn : tempDoc.getOrderedNodes()) {
-                if (bn.isDeleted() || bn.getContent() == null) continue;
-                for (CharNode n : bn.getContent().getOrderedNodes()) {
-                    if (!n.isDeleted()) sb.append(n.getValue());
-                    if (sb.length() >= 80) break;
-                }
+            for (CharNode n : crdt.getOrderedNodes()) {
+                if (!n.isDeleted()) sb.append(n.getValue());
                 if (sb.length() >= 80) break;
             }
             String text = sb.toString().replace('\n', ' ').trim();
-            return text.isEmpty() ? "(empty)" : (text.length() > 75 ? text.substring(0, 75) + "..." : text);
+            return text.isEmpty() ? "(empty)" : (text.length() > 75 ? text.substring(0, 75) + "…" : text);
         } catch (Exception ex) {
             return "(snapshot)";
         }
     }
+
     // =========================================================================
-    // BLOCK OPERATIONS – all handlers fixed
+    // BLOCK OPERATIONS
     // =========================================================================
     private JPopupMenu buildContextMenu() {
         JPopupMenu menu = new JPopupMenu();
@@ -566,23 +550,18 @@ public class EditorUI {
         JMenuItem addCommentItem = new JMenuItem("💬 Add Comment");
         addCommentItem.addActionListener(e -> {
             int start = textPane.getSelectionStart(), end = textPane.getSelectionEnd();
-            if (start == end) {
-                JOptionPane.showMessageDialog(frame, "Highlight some text first.");
-                return;
-            }
+            if (start == end) { JOptionPane.showMessageDialog(frame, "Highlight some text first."); return; }
             List<CharNode> visible = doc.GetVisibleNodes();
             if (end > visible.size()) return;
-            String commentText = JOptionPane.showInputDialog(frame, "Enter comment:", "Add Comment", JOptionPane.PLAIN_MESSAGE);
+            String commentText = JOptionPane.showInputDialog(frame, "Enter comment:", "Add Comment",
+                    JOptionPane.PLAIN_MESSAGE);
             if (commentText == null || commentText.isBlank()) return;
             client.sendAddComment(commentText.trim(), visible.get(start), visible.get(end - 1));
         });
 
         JMenuItem viewCommentsItem = new JMenuItem("📋 View Comments");
         viewCommentsItem.addActionListener(e -> {
-            if (activeComments.isEmpty()) {
-                JOptionPane.showMessageDialog(frame, "No comments yet.");
-                return;
-            }
+            if (activeComments.isEmpty()) { JOptionPane.showMessageDialog(frame, "No comments yet."); return; }
             StringBuilder sb = new StringBuilder();
             for (Comment c : activeComments.values())
                 sb.append("• ").append(c.authorUsername).append(": ").append(c.text).append("\n");
@@ -594,13 +573,13 @@ public class EditorUI {
 
         if (client.isEditor()) {
             menu.addSeparator();
-            JMenuItem moveUpItem = new JMenuItem("⬆ Move Block Up");
+            JMenuItem moveUpItem    = new JMenuItem("⬆ Move Block Up");
             moveUpItem.addActionListener(e -> handleMoveBlock(-1));
-            JMenuItem moveDownItem = new JMenuItem("⬇ Move Block Down");
+            JMenuItem moveDownItem  = new JMenuItem("⬇ Move Block Down");
             moveDownItem.addActionListener(e -> handleMoveBlock(1));
             JMenuItem copyBlockItem = new JMenuItem("📋 Copy Block");
             copyBlockItem.addActionListener(e -> handleCopyBlock());
-            JMenuItem splitBlockItem = new JMenuItem("✂ Split Block Here");
+            JMenuItem splitBlockItem  = new JMenuItem("✂ Split Block Here");
             splitBlockItem.addActionListener(e -> handleManualSplitBlock());
             JMenuItem deleteBlockItem = new JMenuItem("🗑 Delete Block");
             deleteBlockItem.addActionListener(e -> handleDeleteBlock());
@@ -614,57 +593,24 @@ public class EditorUI {
         return menu;
     }
 
-    // -------------------------------------------------------------------------
-    // FIX: handleMoveBlock – correct anchor calculation for up/down
-    // -------------------------------------------------------------------------
-    /**
-     * Move block up (direction=-1) or down (direction=+1).
-     *
-     * For moving UP:   the block needs to land BEFORE its predecessor.
-     *   → afterBlockID = the block that is currently TWO positions above
-     *     (i.e. ordered[currentIdx - 2]), or null if there are none.
-     *
-     * For moving DOWN: the block needs to land AFTER its successor.
-     *   → afterBlockID = ordered[currentIdx + 1]  (the successor itself).
-     */
     private void handleMoveBlock(int direction) {
         BlockID activeBlockID = client.getActiveBlockID();
-        if (activeBlockID == null) {
-            JOptionPane.showMessageDialog(frame, "No active block selected.");
-            return;
-        }
+        if (activeBlockID == null) { JOptionPane.showMessageDialog(frame, "No active block selected."); return; }
         BlockCRDT blockDoc = client.getLocalDoc();
         List<BlockNode> ordered = blockDoc.getOrderedNodes();
         int currentIdx = -1;
         for (int i = 0; i < ordered.size(); i++) {
-            if (ordered.get(i).getId().equals(activeBlockID)) {
-                currentIdx = i;
-                break;
-            }
+            if (ordered.get(i).getId().equals(activeBlockID)) { currentIdx = i; break; }
         }
-        if (currentIdx == -1) {
-            JOptionPane.showMessageDialog(frame, "Could not locate the current block.");
-            return;
-        }
+        if (currentIdx == -1) { JOptionPane.showMessageDialog(frame, "Could not locate the current block."); return; }
         int targetIdx = currentIdx + direction;
         if (targetIdx < 0 || targetIdx >= ordered.size()) {
             JOptionPane.showMessageDialog(frame, direction == -1 ? "Already at top" : "Already at bottom");
             return;
         }
-        BlockID afterID;
-        if (direction == -1) {
-            // Moving up: insert before the predecessor.
-            // The 'after' anchor is the block that comes BEFORE the new position.
-            // If moving to index 0, afterID = null (insert at top)
-            if (targetIdx == 0) {
-                afterID = null;
-            } else {
-                afterID = ordered.get(targetIdx - 1).getId();
-            }
-        } else {
-            // Moving down: insert after the successor
-            afterID = ordered.get(targetIdx).getId();
-        }
+        BlockID afterID = (direction == -1)
+                ? (targetIdx == 0 ? null : ordered.get(targetIdx - 1).getId())
+                : ordered.get(targetIdx).getId();
         BlockNode moved = blockDoc.moveBlock(activeBlockID, afterID);
         if (moved != null) {
             client.sendMoveBlock(activeBlockID, afterID);
@@ -677,28 +623,11 @@ public class EditorUI {
         }
     }
 
-    // -------------------------------------------------------------------------
-    // FIX: handleCopyBlock – single network message, no redundant inserts
-    // -------------------------------------------------------------------------
-    /**
-     * Copy block: duplicate the active block.
-     *
-     * The local BlockCRDT.copyBlock() creates the copy in memory with fresh
-     * char IDs.  We then send ONE COPY_BLOCK message over the network so peer
-     * clients can replicate the same operation.  We do NOT send redundant
-     * INSERT_BLOCK / INSERT_CHAR messages.
-     */
     private void handleCopyBlock() {
         BlockID activeBlockID = client.getActiveBlockID();
-        if (activeBlockID == null) {
-            JOptionPane.showMessageDialog(frame, "No active block to copy.");
-            return;
-        }
-        BlockCRDT blockDoc = client.getLocalDoc();
-        // Insert the copy immediately after the source block.
-        BlockNode copied = blockDoc.copyBlock(activeBlockID, activeBlockID);
+        if (activeBlockID == null) { JOptionPane.showMessageDialog(frame, "No active block to copy."); return; }
+        BlockNode copied = client.getLocalDoc().copyBlock(activeBlockID, activeBlockID);
         if (copied != null) {
-            // Send a single COPY_BLOCK op; peers will call copyBlock themselves.
             client.sendCopyBlock(activeBlockID, activeBlockID);
             renderDocument(textPane.getCaretPosition());
             drawRemoteCursors();
@@ -709,40 +638,30 @@ public class EditorUI {
     }
 
     // -------------------------------------------------------------------------
-    // FIX: handleManualSplitBlock – correct global → local index conversion
-    //      and update active block to the new block after split.
+    // FIX: handleManualSplitBlock
+    // Uses sendSplitBlock(blockID, newBlock, localIndex) so every remote peer
+    // receives the exact BlockID of the new second block and recreates it with
+    // the same identity → characters typed there are visible on all peers.
     // -------------------------------------------------------------------------
-    /**
-     * Manually split the active block at the cursor position.
-     *
-     * The global cursor position is converted to a LOCAL index within the
-     * active block's visible character list before calling splitBlockAtCursor.
-     */
     private void handleManualSplitBlock() {
         BlockID activeBlockID = client.getActiveBlockID();
-        if (activeBlockID == null) {
-            JOptionPane.showMessageDialog(frame, "No active block.");
-            return;
-        }
+        if (activeBlockID == null) { JOptionPane.showMessageDialog(frame, "No active block."); return; }
+
         int globalCursorPos = textPane.getCaretPosition();
-        BlockCRDT blockDoc = client.getLocalDoc();
+        BlockCRDT blockDoc  = client.getLocalDoc();
         List<BlockNode> ordered = blockDoc.getOrderedNodes();
 
-        // Find local index within the active block
-        int globalOffset = 0;
-        int localIndex = -1;
+        int globalOffset  = 0;
+        int localIndex    = -1;
         BlockNode activeBlock = null;
         for (BlockNode block : ordered) {
             if (block.isDeleted() || block.getContent() == null) continue;
-            List<CharNode> chars = block.getContent().getOrderedNodes();
             int visibleCount = 0;
-            for (CharNode cn : chars) {
+            for (CharNode cn : block.getContent().getOrderedNodes())
                 if (!cn.isDeleted()) visibleCount++;
-            }
             if (block.getId().equals(activeBlockID)) {
                 activeBlock = block;
-                localIndex = globalCursorPos - globalOffset;
-                localIndex = Math.max(0, Math.min(localIndex, visibleCount));
+                localIndex  = Math.max(0, Math.min(globalCursorPos - globalOffset, visibleCount));
                 break;
             }
             globalOffset += visibleCount;
@@ -751,15 +670,17 @@ public class EditorUI {
             JOptionPane.showMessageDialog(frame, "Cannot find active block or cursor position.");
             return;
         }
-        // Prevent split at very beginning or very end (no effect)
-        int totalVisible = (int) activeBlock.getContent().getOrderedNodes().stream().filter(cn -> !cn.isDeleted()).count();
+        int totalVisible = (int) activeBlock.getContent().getOrderedNodes()
+                .stream().filter(cn -> !cn.isDeleted()).count();
         if (localIndex <= 0 || localIndex >= totalVisible) {
             JOptionPane.showMessageDialog(frame, "Cannot split at cursor (boundary).");
             return;
         }
+
         BlockNode newBlock = blockDoc.splitBlockAtCursor(activeBlockID, localIndex);
         if (newBlock != null) {
-            client.sendSplitBlock(activeBlockID, localIndex);
+            // FIX: send newBlock so remote peers use the same BlockID.
+            client.sendSplitBlock(activeBlockID, newBlock, localIndex);
             client.setActiveBlockID(newBlock.getId());
             renderDocument(0);
             drawRemoteCursors();
@@ -769,41 +690,19 @@ public class EditorUI {
             JOptionPane.showMessageDialog(frame, "Split failed.");
         }
     }
-    // -------------------------------------------------------------------------
-    // FIX: handleDeleteBlock – delete the WHOLE block (not just 10 lines),
-    //      ensure merge check on neighbours, guarantee a block always exists.
-    // -------------------------------------------------------------------------
-    /**
-     * Deletes the entire active block.
-     *
-     * After deletion:
-     *  1. Neighbouring blocks are checked for the 2-line minimum (handled
-     *     inside BlockCRDT.deleteNode).
-     *  2. If the document is now empty a fresh empty block is created so the
-     *     user can continue typing.
-     *  3. The active block ID is updated to a valid remaining block.
-     */
+
     private void handleDeleteBlock() {
         BlockID activeBlockID = client.getActiveBlockID();
-        if (activeBlockID == null) {
-            JOptionPane.showMessageDialog(frame, "No active block.");
-            return;
-        }
+        if (activeBlockID == null) { JOptionPane.showMessageDialog(frame, "No active block."); return; }
         int confirm = JOptionPane.showConfirmDialog(frame,
                 "Delete this entire block?\n(Use Ctrl+Z for character-level undo.)",
                 "Delete Block", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
         if (confirm != JOptionPane.YES_OPTION) return;
 
         BlockCRDT blockDoc = client.getLocalDoc();
-
-        // Capture a snapshot for undo BEFORE deleting.
-        // sendDeleteBlock already serialises the snapshot into Operations.blockSnapshot.
         client.sendDeleteBlock(activeBlockID);
-
-        // Delete the node locally; deleteNode handles neighbour merges internally.
         blockDoc.deleteNode(activeBlockID);
 
-        // If the document is now empty, create a new placeholder block.
         List<BlockNode> remaining = blockDoc.getOrderedNodes();
         if (remaining.isEmpty()) {
             BlockNode newBlock = blockDoc.insertTopLevelBlock(
@@ -811,10 +710,8 @@ public class EditorUI {
             client.setActiveBlockID(newBlock.getId());
             client.sendInsertBlock(newBlock);
         } else {
-            // Set the active block to the first remaining block.
             client.setActiveBlockID(remaining.get(0).getId());
         }
-
         renderDocument(0);
         drawRemoteCursors();
         updateRemoteCursorDisplay();
@@ -824,42 +721,15 @@ public class EditorUI {
     // Render helpers
     // =========================================================================
 
-    /**
-     * Returns all visible (non-deleted) characters across all live blocks in
-     * document order.
-     *
-     * FIX: When the BlockCRDT has blocks, we always use it as the source of
-     * truth.  We fall back to the single-block Document only when the BlockCRDT
-     * has no live blocks at all (legacy / empty-document case).
-     */
-    /*private List<CharNode> getAllVisibleNodes() {
-        List<CharNode> result = new java.util.ArrayList<>();
-        List<BlockNode> liveBlocks = client.getLocalDoc().getOrderedNodes();
-        for (BlockNode block : liveBlocks) {
-            if (block.isDeleted() || block.getContent() == null) continue;
-            for (CharNode node : block.getContent().getOrderedNodes()) {
-                if (!node.isDeleted()) result.add(node);
-            }
-        }
-        // Fallback: use the legacy single-block Document when there are no live blocks.
-        if (result.isEmpty()) result = doc.GetVisibleNodes();
-        return result;
-    }*/
-
     private List<CharNode> getAllVisibleNodes() {
         List<CharNode> result = new java.util.ArrayList<>();
         List<BlockNode> liveBlocks = client.getLocalDoc().getOrderedNodes();
         for (BlockNode block : liveBlocks) {
             if (block.isDeleted() || block.getContent() == null) continue;
-            for (CharNode node : block.getContent().getOrderedNodes()) {
+            for (CharNode node : block.getContent().getOrderedNodes())
                 if (!node.isDeleted()) result.add(node);
-            }
         }
-        // FIX: only fall back when there are truly NO live blocks at all
-        // (not just because the live blocks are empty after a delete)
-        if (result.isEmpty() && liveBlocks.isEmpty()) {
-            result = doc.GetVisibleNodes();
-        }
+        if (result.isEmpty() && liveBlocks.isEmpty()) result = doc.GetVisibleNodes();
         return result;
     }
 
@@ -873,59 +743,29 @@ public class EditorUI {
         return null;
     }
 
-    /**
-     * Inserts {@code value} at {@code globalIndex} in the concatenated visible
-     * text of all blocks.
-     *
-     * FIX (Bug #5 – typing after block ops):
-     *   The previous implementation always fell back to the legacy Document
-     *   object, causing new characters to appear at the top of the file.
-     *
-     *   The corrected implementation walks the BlockCRDT block list, counts
-     *   visible characters per block, and inserts into the correct block's
-     *   CharCRDT.  The legacy fallback is used only if no live blocks exist.
-     */
     private CharNode globalInsert(char value, int globalIndex) {
         List<BlockNode> liveBlocks = client.getLocalDoc().getOrderedNodes();
+        if (liveBlocks.isEmpty()) return doc.LocalInsert(value, globalIndex);
 
-        if (liveBlocks.isEmpty()) {
-            // Legacy fallback: insert into the single-block Document.
-            return doc.LocalInsert(value, globalIndex);
-        }
-
-        // Walk blocks, accumulating visible-char counts.
         int accumulated = 0;
         for (BlockNode block : liveBlocks) {
             if (block.isDeleted() || block.getContent() == null) continue;
-
             List<CharNode> visibleInBlock = new java.util.ArrayList<>();
-            for (CharNode cn : block.getContent().getOrderedNodes()) {
+            for (CharNode cn : block.getContent().getOrderedNodes())
                 if (!cn.isDeleted()) visibleInBlock.add(cn);
-            }
-            int blockSize = visibleInBlock.size();
-
-            // The cursor falls inside this block, or at its very end,
-            // or this is the last block and we're appending.
-            boolean isLastBlock = (block == liveBlocks.get(liveBlocks.size() - 1));
-            if (globalIndex <= accumulated + blockSize || isLastBlock) {
-                int localIdx = globalIndex - accumulated;
-                // Clamp to [0, blockSize].
-                localIdx = Math.max(0, Math.min(localIdx, blockSize));
-
-                CharID parentID;
-                if (localIdx == 0) {
-                    parentID = block.getContent().rootID;
-                } else {
-                    parentID = visibleInBlock.get(localIdx - 1).getID();
-                }
+            int blockSize    = visibleInBlock.size();
+            boolean isLast   = (block == liveBlocks.get(liveBlocks.size() - 1));
+            if (globalIndex <= accumulated + blockSize || isLast) {
+                int localIdx = Math.max(0, Math.min(globalIndex - accumulated, blockSize));
+                CharID parentID = (localIdx == 0)
+                        ? block.getContent().rootID
+                        : visibleInBlock.get(localIdx - 1).getID();
                 return block.getContent().insertNode(parentID, value);
             }
             accumulated += blockSize;
         }
-
-        // Should not reach here; insert at end of last live block as a last resort.
-        BlockNode lastBlock = liveBlocks.get(liveBlocks.size() - 1);
-        return lastBlock.getContent().insertNode(lastBlock.getContent().rootID, value);
+        BlockNode last = liveBlocks.get(liveBlocks.size() - 1);
+        return last.getContent().insertNode(last.getContent().rootID, value);
     }
 
     private void renderDocument(int newCursorPosition) {
@@ -939,9 +779,7 @@ public class EditorUI {
                 StyleConstants.setItalic(style, node.isItalic());
                 styledDoc.insertString(styledDoc.getLength(), String.valueOf(node.getValue()), style);
             }
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
+        } catch (Exception e) { e.printStackTrace(); }
         textPane.setCaretPosition(Math.min(newCursorPosition, styledDoc.getLength()));
         drawCommentHighlights();
     }
@@ -989,9 +827,8 @@ public class EditorUI {
         for (BlockNode block : client.getLocalDoc().getOrderedNodes()) {
             if (block.isDeleted() || block.getContent() == null) continue;
             int visibleInBlock = 0;
-            for (CharNode cn : block.getContent().getOrderedNodes()) {
+            for (CharNode cn : block.getContent().getOrderedNodes())
                 if (!cn.isDeleted()) visibleInBlock++;
-            }
             currentCount += visibleInBlock;
             if (cursorPos <= currentCount || visibleInBlock == 0) {
                 client.setActiveBlockID(block.getId());
@@ -1022,8 +859,7 @@ public class EditorUI {
     }
 
     private Color getUserColor(String user) {
-        int index = Math.abs(user.toLowerCase().hashCode()) % CURSOR_COLORS.length;
-        return CURSOR_COLORS[index];
+        return CURSOR_COLORS[Math.abs(user.toLowerCase().hashCode()) % CURSOR_COLORS.length];
     }
 
     private void drawRemoteCursors() {
@@ -1036,7 +872,8 @@ public class EditorUI {
             if (length == 0) continue;
             try {
                 int p0 = Math.min(pos, length - 1);
-                Object tag = highlighter.addHighlight(p0, p0 + 1, new CursorPainter(getUserColor(user), pos));
+                Object tag = highlighter.addHighlight(p0, p0 + 1,
+                        new CursorPainter(getUserColor(user), pos));
                 cursorHighlights.put(user, tag);
             } catch (BadLocationException ignored) {}
         }
@@ -1050,7 +887,8 @@ public class EditorUI {
     private JPanel buildCommentCard(Comment c) {
         JPanel card = new JPanel(new BorderLayout(5, 5));
         card.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createMatteBorder(0, 3, 0, 0, c.resolved ? Color.GRAY : new Color(255, 200, 0)),
+                BorderFactory.createMatteBorder(0, 3, 0, 0,
+                        c.resolved ? Color.GRAY : new Color(255, 200, 0)),
                 BorderFactory.createEmptyBorder(8, 8, 8, 8)));
         card.setBackground(c.resolved ? new Color(245, 245, 245) : Color.WHITE);
         card.setMaximumSize(new Dimension(Integer.MAX_VALUE, 100));
@@ -1058,9 +896,7 @@ public class EditorUI {
                 + new java.text.SimpleDateFormat("HH:mm").format(new java.util.Date(c.timestamp)) + "</html>");
         header.setFont(new Font("Segoe UI", Font.PLAIN, 11));
         JTextArea textArea = new JTextArea(c.text);
-        textArea.setEditable(false);
-        textArea.setLineWrap(true);
-        textArea.setWrapStyleWord(true);
+        textArea.setEditable(false); textArea.setLineWrap(true); textArea.setWrapStyleWord(true);
         textArea.setBackground(card.getBackground());
         textArea.setFont(new Font("Segoe UI", Font.PLAIN, 12));
         JButton resolveBtn = new JButton(c.resolved ? "Resolved ✓" : "Resolve");
@@ -1081,16 +917,13 @@ public class EditorUI {
         commentHighlights.clear();
         if (commentsListPanel != null) commentsListPanel.removeAll();
 
-        // Use getAllVisibleNodes() instead of doc.GetVisibleNodes()
         List<CharNode> visible = getAllVisibleNodes();
         for (Comment c : activeComments.values()) {
             int startIdx = -1, endIdx = -1;
             for (int i = 0; i < visible.size(); i++) {
                 CharNode n = visible.get(i);
-                if (n.getID().getUserID() == c.startCharUser && n.getID().getClock() == c.startCharClock)
-                    startIdx = i;
-                if (n.getID().getUserID() == c.endCharUser && n.getID().getClock() == c.endCharClock)
-                    endIdx = i + 1;
+                if (n.getID().getUserID() == c.startCharUser && n.getID().getClock() == c.startCharClock) startIdx = i;
+                if (n.getID().getUserID() == c.endCharUser   && n.getID().getClock() == c.endCharClock)   endIdx   = i + 1;
             }
             if (startIdx != -1 && endIdx != -1 && endIdx > startIdx) {
                 try {
@@ -1105,10 +938,7 @@ public class EditorUI {
                 commentsListPanel.add(Box.createVerticalStrut(5));
             }
         }
-        if (commentsListPanel != null) {
-            commentsListPanel.revalidate();
-            commentsListPanel.repaint();
-        }
+        if (commentsListPanel != null) { commentsListPanel.revalidate(); commentsListPanel.repaint(); }
     }
 
     // =========================================================================
@@ -1119,11 +949,9 @@ public class EditorUI {
         chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("Text files (*.txt)", "txt"));
         if (chooser.showOpenDialog(frame) != JFileChooser.APPROVE_OPTION) return;
         String content;
-        try {
-            content = java.nio.file.Files.readString(chooser.getSelectedFile().toPath());
-        } catch (java.io.IOException ex) {
-            JOptionPane.showMessageDialog(frame, "Failed to read file: " + ex.getMessage());
-            return;
+        try { content = java.nio.file.Files.readString(chooser.getSelectedFile().toPath()); }
+        catch (java.io.IOException ex) {
+            JOptionPane.showMessageDialog(frame, "Failed to read file: " + ex.getMessage()); return;
         }
         JDialog progressDialog = new JDialog(frame, "Importing...", false);
         JProgressBar progressBar = new JProgressBar(0, content.length());
@@ -1140,34 +968,29 @@ public class EditorUI {
         progressDialog.setVisible(true);
         final String finalContent = content;
         SwingWorker<Void, Integer> worker = new SwingWorker<>() {
-            @Override
-            protected Void doInBackground() {
+            @Override protected Void doInBackground() {
                 BlockCRDT blockDoc = client.getLocalDoc();
                 List<BlockNode> newBlocks = blockDoc.importText(finalContent);
                 int charCount = 0;
                 for (BlockNode block : newBlocks) {
                     client.sendInsertBlock(block);
-                    for (CharNode cn : block.getChars()) {
-                        client.sendInsertChar(cn);
-                        publish(++charCount);
-                    }
+                    for (CharNode cn : block.getChars()) { client.sendInsertChar(cn); publish(++charCount); }
                 }
-                if (!newBlocks.isEmpty())
-                    client.setActiveBlockID(newBlocks.get(newBlocks.size() - 1).getId());
+                if (!newBlocks.isEmpty()) client.setActiveBlockID(newBlocks.get(newBlocks.size()-1).getId());
                 return null;
             }
-            @Override
-            protected void process(java.util.List<Integer> chunks) {
-                int latest = chunks.get(chunks.size() - 1);
+            @Override protected void process(java.util.List<Integer> chunks) {
+                int latest = chunks.get(chunks.size()-1);
                 progressBar.setValue(latest);
                 progressBar.setString(latest + " / " + finalContent.length() + " characters");
             }
-            @Override
-            protected void done() {
+            @Override protected void done() {
                 progressDialog.dispose();
                 renderDocument(getAllVisibleNodes().size());
                 drawRemoteCursors();
-                JOptionPane.showMessageDialog(frame, "Import complete! " + finalContent.length() + " characters added.", "Done", JOptionPane.INFORMATION_MESSAGE);
+                JOptionPane.showMessageDialog(frame,
+                        "Import complete! " + finalContent.length() + " characters added.",
+                        "Done", JOptionPane.INFORMATION_MESSAGE);
             }
         };
         worker.execute();
@@ -1181,10 +1004,10 @@ public class EditorUI {
         java.io.File file = chooser.getSelectedFile();
         if (!file.getName().endsWith(".txt")) file = new java.io.File(file.getAbsolutePath() + ".txt");
         try (java.io.PrintWriter pw = new java.io.PrintWriter(new java.io.FileWriter(file))) {
-            for (CharNode node : doc.GetVisibleNodes()) {
+            for (CharNode node : getAllVisibleNodes()) {
                 if (node.isBold() && node.isItalic()) pw.print("***" + node.getValue() + "***");
-                else if (node.isBold()) pw.print("**" + node.getValue() + "**");
-                else if (node.isItalic()) pw.print("*" + node.getValue() + "*");
+                else if (node.isBold())   pw.print("**" + node.getValue() + "**");
+                else if (node.isItalic()) pw.print("*"  + node.getValue() + "*");
                 else pw.print(node.getValue());
             }
             JOptionPane.showMessageDialog(frame, "Exported successfully to: " + file.getName());
@@ -1193,11 +1016,10 @@ public class EditorUI {
         }
     }
 
-    // REPLACE THIS METHOD
     private void onSave() {
-        // THE FIX: Serialize the entire Block array, not just the active Char array!
-        String fullDocJson = CrdtSerializer.toDocumentJson(client.getLocalDoc());
-        client.sendSaveDoc(fullDocJson);
+        CharCRDT crdt = client.getActiveCharCRDT();
+        if (crdt == null) { JOptionPane.showMessageDialog(frame, "Not connected to a session."); return; }
+        client.sendSaveDoc(CrdtSerializer.toJson(crdt));
         JOptionPane.showMessageDialog(frame, "Document saved successfully.");
     }
 
@@ -1229,16 +1051,11 @@ public class EditorUI {
             int safeIndex = Math.min(cursorPosition, getAllVisibleNodes().size());
             for (int i = 0; i < pasted.length(); i++) {
                 CharNode inserted = globalInsert(pasted.charAt(i), safeIndex + i);
-                if (inserted != null) {
-                    doc.InheritFormatting(safeIndex + i);
-                    client.sendInsertChar(inserted);
-                }
+                if (inserted != null) { doc.InheritFormatting(safeIndex + i); client.sendInsertChar(inserted); }
             }
             renderDocument(safeIndex + pasted.length());
             drawRemoteCursors();
-        } catch (Exception ex) {
-            JOptionPane.showMessageDialog(frame, "Paste failed");
-        }
+        } catch (Exception ex) { JOptionPane.showMessageDialog(frame, "Paste failed"); }
     }
 
     private void handleCut() {
@@ -1267,10 +1084,7 @@ public class EditorUI {
         public void paint(Graphics g, int p0, int p1, Shape bounds, JTextComponent c) {
             try {
                 Rectangle r = c.modelToView(cursorPos);
-                if (r != null) {
-                    g.setColor(color);
-                    g.fillRect(r.x, r.y, 3, r.height);
-                }
+                if (r != null) { g.setColor(color); g.fillRect(r.x, r.y, 3, r.height); }
             } catch (BadLocationException ignored) {}
         }
     }

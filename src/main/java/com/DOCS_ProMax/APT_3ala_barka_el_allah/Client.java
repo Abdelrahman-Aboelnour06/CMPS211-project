@@ -12,15 +12,25 @@ import java.util.concurrent.TimeUnit;
 /**
  * WebSocket client that connects to the collaboration server.
  *
- * Full Phase 3 implementation:
- *  - Character CRDT operations (insert, delete, format)
- *  - Block CRDT operations (insert, delete, split, merge, move, copy)
- *  - Session management (create, join, reconnect)
- *  - Document persistence (save, load, list, delete, rename)
- *  - Version history (get versions, rollback)
- *  - Comments (add, delete, resolve, get)
- *  - Undo/Redo (own + other users' changes)
- *  - Auto-reconnect on disconnect
+ * KEY FIX in this revision
+ * ────────────────────────
+ * INSERT_BLOCK remote handler previously called insertTopLevelBlock() which
+ * generated a BRAND NEW BlockID, so the remote peer's block had a different
+ * identity from the sender's block.  That caused:
+ *   - The remote block to be silently duplicated or placed in the wrong slot.
+ *   - INSERT_CHAR ops for that block to target an ID that didn't exist on the
+ *     remote peer, so all subsequent characters were lost.
+ *
+ * The handler now calls insertBlockWithID(blockID, parentID, content) which
+ * reuses the exact same BlockID that was sent over the wire, making both
+ * peers converge on an identical block tree.
+ *
+ * SPLIT_BLOCK remote handler had the same problem: it called
+ * splitBlockAtCursor() which internally creates a sibling with a fresh ID.
+ * That new ID is different on every peer, so the two halves diverge.
+ * The handler now calls insertBlockWithID for the NEW (second) half using
+ * the IDs carried in the message (targetBlockUser / targetBlockClock), and
+ * moveTextFromIndex to migrate characters from the source block.
  */
 public class Client extends WebSocketClient {
 
@@ -50,7 +60,6 @@ public class Client extends WebSocketClient {
     // -----------------------------------------------------------------------
     // Constructor
     // -----------------------------------------------------------------------
-
     public Client(String serverUri, BlockCRDT localDoc, Clock sharedClock, BlockID activeBlockID)
             throws URISyntaxException {
         super(new URI(serverUri));
@@ -109,25 +118,39 @@ public class Client extends WebSocketClient {
             // Character operations
             // ------------------------------------------------------------------
 
-            // ── BLOCK SPLIT CHECK ─────────────────────────────────
-            // ------------------------------------------------------------------
-            // Character operations
-            // ------------------------------------------------------------------
-
             case "INSERT_CHAR" -> {
                 CharID incomingID = new CharID(op.charUser, op.charClock);
                 CharID parentID   = new CharID(op.parentUser, op.parentClock);
                 sharedClock.advanceTo(op.charClock);
 
-                // THE FIX: Search all blocks to find where the parent letter lives
+                // Search ALL blocks to find the one whose CRDT contains the parent node.
+                boolean inserted = false;
                 for (BlockNode block : localDoc.getOrderedNodes()) {
-                    if (block.getContent() != null && block.getContent().getNode(parentID) != null) {
-                        CharNode inserted = block.getContent().RemotelyInsertion(incomingID, parentID, op.value);
-                        if (inserted != null) {
-                            inserted.setBold(op.isBold);
-                            inserted.setItalic(op.isItalic);
+                    if (block.getContent() != null
+                            && block.getContent().getNode(parentID) != null) {
+                        CharNode insertedNode =
+                                block.getContent().RemotelyInsertion(incomingID, parentID, op.value);
+                        if (insertedNode != null) {
+                            insertedNode.setBold(op.isBold);
+                            insertedNode.setItalic(op.isItalic);
                         }
+                        inserted = true;
                         break;
+                    }
+                }
+                // Fallback: try the root-ID sentinel (parentID == rootID of some block).
+                if (!inserted) {
+                    for (BlockNode block : localDoc.getOrderedNodes()) {
+                        if (block.getContent() != null
+                                && block.getContent().rootID.equals(parentID)) {
+                            CharNode insertedNode =
+                                    block.getContent().RemotelyInsertion(incomingID, parentID, op.value);
+                            if (insertedNode != null) {
+                                insertedNode.setBold(op.isBold);
+                                insertedNode.setItalic(op.isItalic);
+                            }
+                            break;
+                        }
                     }
                 }
             }
@@ -136,7 +159,6 @@ public class Client extends WebSocketClient {
                 CharID targetID = new CharID(op.charUser, op.charClock);
                 sharedClock.advanceTo(op.charClock);
 
-                // THE FIX: Search all blocks for the character to delete
                 for (BlockNode block : localDoc.getOrderedNodes()) {
                     if (block.getContent() != null) {
                         CharNode node = block.getContent().getNode(targetID);
@@ -174,27 +196,35 @@ public class Client extends WebSocketClient {
                     }
                 }
             }
-            // ── END BLOCK SPLIT CHECK ─────────────────────────────
+
             // ------------------------------------------------------------------
             // Block operations
             // ------------------------------------------------------------------
 
-            /*case "INSERT_BLOCK" -> {
-                CharCRDT newCRDT = new CharCRDT(op.blockUser, sharedClock);
-                BlockNode newBlock = localDoc.insertTopLevelBlock(newCRDT);
-                System.out.println("[Client] Remote INSERT_BLOCK applied: " + newBlock.getId());
-            }*/
-
-            // FIXED — replicates the exact same BlockID
+            /*
+             * FIX: INSERT_BLOCK
+             * ─────────────────
+             * We MUST recreate the block with the EXACT same BlockID that the
+             * sender used.  insertTopLevelBlock() generates a NEW id and breaks
+             * convergence.  insertBlockWithID() reuses the wire id.
+             *
+             * parentBlockUser / parentBlockClock carry the parent's id so the
+             * block lands in the right place in the tree.  For top-level blocks
+             * the sender sets these to -1/-1 (ROOT_ID).
+             */
             case "INSERT_BLOCK" -> {
                 BlockID blockID  = new BlockID(op.blockUser, op.blockClock);
                 BlockID parentID = new BlockID(op.parentBlockUser, op.parentBlockClock);
                 sharedClock.advanceTo(op.blockClock);
-                CharCRDT newCRDT = new CharCRDT(op.blockUser, sharedClock);
-                // Restore chars from snapshot if present (handles import replay)
+
+                CharCRDT newCRDT;
                 if (op.blockSnapshot != null && !op.blockSnapshot.isBlank()) {
+                    // Restore from snapshot (used during import replay and undo/redo).
                     newCRDT = CrdtSerializer.fromJson(op.blockSnapshot, op.blockUser);
+                } else {
+                    newCRDT = new CharCRDT(op.blockUser, sharedClock);
                 }
+
                 BlockNode newBlock = localDoc.insertBlockWithID(blockID, parentID, newCRDT);
                 System.out.println("[Client] Remote INSERT_BLOCK applied: " + newBlock.getId());
             }
@@ -205,10 +235,55 @@ public class Client extends WebSocketClient {
                 System.out.println("[Client] Remote DELETE_BLOCK applied: " + targetID);
             }
 
+            /*
+             * FIX: SPLIT_BLOCK
+             * ────────────────
+             * The local splitBlockAtCursor() creates the second block with a
+             * freshly generated ID – which is different on every peer.
+             *
+             * Instead we:
+             *  1. Look up the source block.
+             *  2. Create the NEW block with the exact ID the sender chose
+             *     (carried in targetBlockUser / targetBlockClock).
+             *  3. Move characters from the source block starting at splitAtIndex
+             *     into the new block.
+             *
+             * This guarantees both peers end up with identically-IDed blocks
+             * whose content is identical.
+             */
             case "SPLIT_BLOCK" -> {
                 BlockID sourceID = new BlockID(op.blockUser, op.blockClock);
-                localDoc.splitBlockAtCursor(sourceID, (int) op.splitAtIndex);
-                System.out.println("[Client] Remote SPLIT_BLOCK applied at index: " + op.splitAtIndex);
+                sharedClock.advanceTo(op.blockClock);
+
+                BlockNode sourceBlock = localDoc.getBlock(sourceID);
+                if (sourceBlock == null || sourceBlock.isDeleted()
+                        || sourceBlock.getContent() == null) {
+                    System.err.println("[Client] SPLIT_BLOCK: source block not found " + sourceID);
+                    break;
+                }
+
+                // The sender puts the new block's ID in targetBlockUser/targetBlockClock.
+                // If those fields are zero (old message format) fall back to local split.
+                if (op.targetBlockUser == 0 && op.targetBlockClock == 0) {
+                    // Legacy fallback – will diverge between peers but won't crash.
+                    localDoc.splitBlockAtCursor(sourceID, (int) op.splitAtIndex);
+                    System.out.println("[Client] SPLIT_BLOCK (legacy) at index: " + op.splitAtIndex);
+                    break;
+                }
+
+                BlockID newBlockID = new BlockID(op.targetBlockUser, op.targetBlockClock);
+                sharedClock.advanceTo(op.targetBlockClock);
+
+                // Create the new (second) block with the exact ID from the wire.
+                CharCRDT newCRDT = new CharCRDT(op.targetBlockUser, sharedClock);
+                BlockNode newBlock = localDoc.insertBlockWithID(
+                        newBlockID, sourceBlock.getParentID(), newCRDT);
+
+                // Move characters from splitAtIndex onward into the new block.
+                sourceBlock.moveTextFromIndex(newBlock, (int) op.splitAtIndex);
+
+                System.out.println("[Client] Remote SPLIT_BLOCK applied: source=" + sourceID
+                        + " new=" + newBlockID + " at index=" + op.splitAtIndex);
             }
 
             case "MERGE_BLOCK" -> {
@@ -224,8 +299,7 @@ public class Client extends WebSocketClient {
                         : null;
                 BlockNode moved = localDoc.moveBlock(sourceID, afterID);
                 if (moved != null) {
-                    System.out.println("[Client] Remote MOVE_BLOCK applied: block " + moved.getId());
-                    // If the moved block is the one we were editing, update our active reference
+                    System.out.println("[Client] Remote MOVE_BLOCK applied: " + moved.getId());
                     if (activeBlockID != null && activeBlockID.equals(sourceID)) {
                         activeBlockID = moved.getId();
                     }
@@ -235,15 +309,13 @@ public class Client extends WebSocketClient {
             }
 
             case "COPY_BLOCK" -> {
-                // op.blockUser / op.blockClock identify the source block to copy
-                // op.targetBlockUser / op.targetBlockClock identify the "insert after" anchor
                 BlockID sourceID = new BlockID(op.blockUser, op.blockClock);
                 BlockID afterID  = (op.targetBlockUser != 0 || op.targetBlockClock != 0)
                         ? new BlockID(op.targetBlockUser, op.targetBlockClock)
                         : null;
                 BlockNode copied = localDoc.copyBlock(sourceID, afterID);
                 if (copied != null) {
-                    System.out.println("[Client] Remote COPY_BLOCK applied: new block " + copied.getId());
+                    System.out.println("[Client] Remote COPY_BLOCK applied: " + copied.getId());
                 } else {
                     System.err.println("[Client] Remote COPY_BLOCK failed for source " + sourceID);
                 }
@@ -412,32 +484,58 @@ public class Client extends WebSocketClient {
     public void sendInsertBlock(BlockNode block) {
         if (!isOpen()) return;
         Operations op = new Operations();
-        op.type = "INSERT_BLOCK";
-        op.sessionCode = sessionCode;
-        op.username = username;
-        op.blockUser = block.getId().getUserID();
-        op.blockClock = block.getId().getClock();
-        op.parentBlockUser = block.getParentID() != null ? block.getParentID().getUserID() : -1;
-        op.parentBlockClock = block.getParentID() != null ? block.getParentID().getClock() : -1;
-        // Capture snapshot of the block's CharCRDT for undo/redo
+        op.type             = "INSERT_BLOCK";
+        op.sessionCode      = sessionCode;
+        op.username         = username;
+        op.blockUser        = block.getId().getUserID();
+        op.blockClock       = block.getId().getClock();
+        op.parentBlockUser  = block.getParentID() != null ? block.getParentID().getUserID()  : -1;
+        op.parentBlockClock = block.getParentID() != null ? block.getParentID().getClock()   : -1;
         if (block.getContent() != null) {
             op.blockSnapshot = CrdtSerializer.toJson(block.getContent());
         }
         send(op.toJson());
     }
+
     public void sendDeleteBlock(BlockID blockID) {
-        BlockNode block = localDoc.getBlock(blockID);
-        String snapshot = (block != null && block.getContent() != null) ? CrdtSerializer.toJson(block.getContent()) : null;
-        Operations op = new Operations();
-        op.type = "DELETE_BLOCK";
-        op.sessionCode = sessionCode;
-        op.username = username;
-        op.blockUser = blockID.getUserID();
-        op.blockClock = blockID.getClock();
+        BlockNode block  = localDoc.getBlock(blockID);
+        String snapshot  = (block != null && block.getContent() != null)
+                ? CrdtSerializer.toJson(block.getContent()) : null;
+        Operations op    = new Operations();
+        op.type          = "DELETE_BLOCK";
+        op.sessionCode   = sessionCode;
+        op.username      = username;
+        op.blockUser     = blockID.getUserID();
+        op.blockClock    = blockID.getClock();
         op.blockSnapshot = snapshot;
         send(op.toJson());
     }
 
+    /**
+     * FIX: sendSplitBlock now also sends the NEW block's ID
+     * (targetBlockUser / targetBlockClock) so every remote peer can recreate
+     * the exact same block instead of generating a fresh divergent ID.
+     *
+     * @param blockID      the block being split (source / first half)
+     * @param newBlock     the newly created second block (returned by splitBlockAtCursor)
+     * @param cursorIndex  the local index at which the split happened
+     */
+    public void sendSplitBlock(BlockID blockID, BlockNode newBlock, int cursorIndex) {
+        if (!isOpen()) return;
+        Operations op           = new Operations();
+        op.type                 = "SPLIT_BLOCK";
+        op.sessionCode          = sessionCode;
+        op.username             = username;
+        op.blockUser            = blockID.getUserID();
+        op.blockClock           = blockID.getClock();
+        op.splitAtIndex         = cursorIndex;
+        // Carry the new block's ID so peers can reuse it.
+        op.targetBlockUser      = newBlock.getId().getUserID();
+        op.targetBlockClock     = newBlock.getId().getClock();
+        send(op.toJson());
+    }
+
+    /** Legacy overload kept for backward-compat; use the 3-arg version instead. */
     public void sendSplitBlock(BlockID blockID, int cursorIndex) {
         if (!isOpen()) return;
         Operations op      = new Operations();
@@ -447,6 +545,7 @@ public class Client extends WebSocketClient {
         op.blockUser       = blockID.getUserID();
         op.blockClock      = blockID.getClock();
         op.splitAtIndex    = cursorIndex;
+        // targetBlockUser/targetBlockClock left as 0 – remote will use legacy fallback.
         send(op.toJson());
     }
 
@@ -461,41 +560,29 @@ public class Client extends WebSocketClient {
         send(op.toJson());
     }
 
-    /**
-     * Sends a MOVE_BLOCK message to the server.
-     *
-     * @param blockID      the block to move
-     * @param afterBlockID the block after which to insert it (null = move to top)
-     */
     public void sendMoveBlock(BlockID blockID, BlockID afterBlockID) {
         if (!isOpen()) return;
-        Operations op          = new Operations();
-        op.type                = "MOVE_BLOCK";
-        op.sessionCode         = sessionCode;
-        op.username            = username;
-        op.blockUser           = blockID.getUserID();
-        op.blockClock          = blockID.getClock();
-        op.targetBlockUser     = afterBlockID != null ? afterBlockID.getUserID() : 0;
-        op.targetBlockClock    = afterBlockID != null ? afterBlockID.getClock()  : 0;
+        Operations op       = new Operations();
+        op.type             = "MOVE_BLOCK";
+        op.sessionCode      = sessionCode;
+        op.username         = username;
+        op.blockUser        = blockID.getUserID();
+        op.blockClock       = blockID.getClock();
+        op.targetBlockUser  = afterBlockID != null ? afterBlockID.getUserID() : 0;
+        op.targetBlockClock = afterBlockID != null ? afterBlockID.getClock()  : 0;
         send(op.toJson());
     }
 
-    /**
-     * Sends a COPY_BLOCK message to the server.
-     *
-     * @param sourceBlockID the block to copy
-     * @param afterBlockID  the block after which the copy is inserted (null = top)
-     */
     public void sendCopyBlock(BlockID sourceBlockID, BlockID afterBlockID) {
         if (!isOpen()) return;
-        Operations op          = new Operations();
-        op.type                = "COPY_BLOCK";
-        op.sessionCode         = sessionCode;
-        op.username            = username;
-        op.blockUser           = sourceBlockID.getUserID();
-        op.blockClock          = sourceBlockID.getClock();
-        op.targetBlockUser     = afterBlockID != null ? afterBlockID.getUserID() : 0;
-        op.targetBlockClock    = afterBlockID != null ? afterBlockID.getClock()  : 0;
+        Operations op       = new Operations();
+        op.type             = "COPY_BLOCK";
+        op.sessionCode      = sessionCode;
+        op.username         = username;
+        op.blockUser        = sourceBlockID.getUserID();
+        op.blockClock       = sourceBlockID.getClock();
+        op.targetBlockUser  = afterBlockID != null ? afterBlockID.getUserID() : 0;
+        op.targetBlockClock = afterBlockID != null ? afterBlockID.getClock()  : 0;
         send(op.toJson());
     }
 
@@ -524,25 +611,25 @@ public class Client extends WebSocketClient {
     // -----------------------------------------------------------------------
 
     public void sendSaveDoc(String crdtJson) {
-        Operations op          = new Operations();
-        op.type                = "SAVE_DOC";
-        op.sessionCode         = sessionCode;
-        op.username            = username;
-        op.ownerUsername       = username;
-        op.payload             = crdtJson;
-        op.originalEditorCode  = originalEditorCode;
+        Operations op         = new Operations();
+        op.type               = "SAVE_DOC";
+        op.sessionCode        = sessionCode;
+        op.username           = username;
+        op.ownerUsername      = username;
+        op.payload            = crdtJson;
+        op.originalEditorCode = originalEditorCode;
         send(op.toJson());
     }
 
     public void sendSaveDoc(String crdtJson, String docName) {
-        Operations op          = new Operations();
-        op.type                = "SAVE_DOC";
-        op.sessionCode         = sessionCode;
-        op.username            = username;
-        op.ownerUsername       = username;
-        op.payload             = crdtJson;
-        op.documentName        = docName;
-        op.originalEditorCode  = originalEditorCode;
+        Operations op         = new Operations();
+        op.type               = "SAVE_DOC";
+        op.sessionCode        = sessionCode;
+        op.username           = username;
+        op.ownerUsername      = username;
+        op.payload            = crdtJson;
+        op.documentName       = docName;
+        op.originalEditorCode = originalEditorCode;
         send(op.toJson());
     }
 
@@ -591,17 +678,24 @@ public class Client extends WebSocketClient {
         op.commentId   = commentId;
         send(op.toJson());
     }
-
+    // ADD THIS METHOD: Intercepts raw send() calls to prevent crashes
+    public void sendSafely(String json) {
+        if (isOpen()) {
+            send(json);
+        } else {
+            System.err.println("[Client] Network transmission aborted: WebSocket is disconnected.");
+        }
+    }
     // -----------------------------------------------------------------------
     // Getters / setters
     // -----------------------------------------------------------------------
 
-    public String getSessionCode()  { return sessionCode; }
-    public String getEditorCode()   { return editorCode; }
-    public String getViewerCode()   { return viewerCode; }
-    public String getUsername()     { return username; }
-    public String getRole()         { return role; }
-    public boolean isEditor()       { return "editor".equals(role); }
+    public String  getSessionCode()  { return sessionCode; }
+    public String  getEditorCode()   { return editorCode; }
+    public String  getViewerCode()   { return viewerCode; }
+    public String  getUsername()     { return username; }
+    public String  getRole()         { return role; }
+    public boolean isEditor()        { return "editor".equals(role); }
 
     public void setActiveBlockID(BlockID id)           { this.activeBlockID = id; }
     public void setMessageListener(MessageListener ml) { this.messageListener = ml; }
@@ -614,13 +708,5 @@ public class Client extends WebSocketClient {
     }
 
     public BlockCRDT getLocalDoc()    { return localDoc; }
-    public BlockID getActiveBlockID() { return activeBlockID; }
-
-    public void sendSafely(String json) {
-        if (isOpen()) {
-            send(json);
-        } else {
-            System.err.println("[Client] Network transmission aborted: WebSocket is disconnected.");
-        }
-    }
+    public BlockID   getActiveBlockID() { return activeBlockID; }
 }
