@@ -1,5 +1,6 @@
 package com.DOCS_ProMax.APT_3ala_barka_el_allah;
-
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -53,25 +54,48 @@ public class CharCRDT {
         return nodeMap.get(id);
     }
 
-    private void depthFirstTraversal(CharNode node, List<CharNode> result) {
-        if (node != root && !node.isDeleted()) {
-            result.add(node);
+    private void depthFirstTraversal(CharNode startNode, List<CharNode> result) {
+        Deque<CharNode> stack = new ArrayDeque<>();
+        // Push children of startNode in reverse order so first child is processed first
+        List<CharNode> rootChildren = startNode.getChildren();
+        for (int i = rootChildren.size() - 1; i >= 0; i--) {
+            stack.push(rootChildren.get(i));
         }
-        for (CharNode child : node.getChildren()) {
-            depthFirstTraversal(child, result);
+
+        while (!stack.isEmpty()) {
+            CharNode node = stack.pop();
+
+            if (!node.isDeleted()) {
+                result.add(node);
+            }
+
+            List<CharNode> children = node.getChildren();
+            for (int i = children.size() - 1; i >= 0; i--) {
+                stack.push(children.get(i));
+            }
         }
     }
-
     public List<CharNode> getAllNodesIncludingDeleted() {
         List<CharNode> result = new ArrayList<>();
         traverseAll(root, result);
         return result;
     }
 
-    private void traverseAll(CharNode node, List<CharNode> result) {
-        if (node != root) result.add(node);
-        for (CharNode child : node.getChildren()) {
-            traverseAll(child, result);
+    private void traverseAll(CharNode startNode, List<CharNode> result) {
+        Deque<CharNode> stack = new ArrayDeque<>();
+        List<CharNode> rootChildren = startNode.getChildren();
+        for (int i = rootChildren.size() - 1; i >= 0; i--) {
+            stack.push(rootChildren.get(i));
+        }
+
+        while (!stack.isEmpty()) {
+            CharNode node = stack.pop();
+            result.add(node);  // no deleted filter here, includes all
+
+            List<CharNode> children = node.getChildren();
+            for (int i = children.size() - 1; i >= 0; i--) {
+                stack.push(children.get(i));
+            }
         }
     }
 

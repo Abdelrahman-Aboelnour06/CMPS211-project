@@ -64,6 +64,9 @@ public class Client extends WebSocketClient {
     public Client(String serverUri, BlockCRDT localDoc, Clock sharedClock, BlockID activeBlockID)
             throws URISyntaxException {
         super(new URI(serverUri));
+        this.setConnectionLostTimeout(0);
+        this.setTcpNoDelay(true);
+
         this.serverUri     = serverUri;
         this.localDoc      = localDoc;
         this.sharedClock   = sharedClock;
@@ -275,12 +278,13 @@ public class Client extends WebSocketClient {
                 BlockID newBlockID = new BlockID(op.targetBlockUser, op.targetBlockClock);
                 sharedClock.advanceTo(op.targetBlockClock);
 
-                // Create the new (second) block with the exact ID from the wire.
+                // Create the new (second) block with the exact ID from the wire,
+// inserted IMMEDIATELY AFTER the source block (anchor = source block ID).
                 CharCRDT newCRDT = new CharCRDT(op.targetBlockUser, sharedClock);
-                BlockNode newBlock = localDoc.insertBlockWithID(
-                        newBlockID, sourceBlock.getParentID(), newCRDT);
+                BlockNode newBlock = localDoc.insertBlockAfterAnchor(
+                        sourceBlock.getId(), newCRDT, newBlockID);
 
-                // Move characters from splitAtIndex onward into the new block.
+// Move characters from splitAtIndex onward into the new block.
                 sourceBlock.moveTextFromIndex(newBlock, (int) op.splitAtIndex);
 
                 System.out.println("[Client] Remote SPLIT_BLOCK applied: source=" + sourceID
@@ -321,7 +325,41 @@ public class Client extends WebSocketClient {
                     System.err.println("[Client] Remote COPY_BLOCK failed for source " + sourceID);
                 }
             }
-// REPLACE the MOVE_BLOCK_EXEC case in Client.java onMessage()
+
+            case "MERGE_SPLIT" -> {
+                BlockID originalID = new BlockID(op.blockUser, op.blockClock);
+                BlockID splitBlockID = new BlockID(op.targetBlockUser, op.targetBlockClock);
+
+                BlockNode originalBlock = localDoc.getBlock(originalID);
+                BlockNode splitBlock = localDoc.getBlock(splitBlockID);
+
+                if (originalBlock == null || splitBlock == null) {
+                    System.err.println("[Client] MERGE_SPLIT failed: block not found");
+                    break;
+                }
+
+                if (originalBlock.isDeleted() || splitBlock.isDeleted()) {
+                    System.err.println("[Client] MERGE_SPLIT ignored: block already deleted");
+                    break;
+                }
+
+                int totalLines = originalBlock.getLineCount() + splitBlock.getLineCount();
+
+                if (totalLines > 10) {
+                    System.err.println("[Client] MERGE_SPLIT rejected: too many lines = " + totalLines);
+                    break;
+                }
+
+                boolean merged = localDoc.mergeWithNext(originalID);
+
+                if (!merged) {
+                    System.err.println("[Client] MERGE_SPLIT failed");
+                } else {
+                    System.out.println("[Client] MERGE_SPLIT applied");
+                }
+            }
+
+
             case "MOVE_BLOCK_EXEC" -> {
                 sharedClock.advanceTo(op.blockClock);
 
@@ -338,6 +376,8 @@ public class Client extends WebSocketClient {
                         oldBlock.setDeleted(true);
                     }
                 }
+
+
 
                 // 2. Rebuild content from snapshot
                 BlockID newBlockID = new BlockID(op.blockUser, op.blockClock);
@@ -509,14 +549,18 @@ public class Client extends WebSocketClient {
     }
 
     public void sendCursor(int index) {
+        if (!isOpen()) return;
+        if (username == null || username.isBlank()) return;
+        if (sessionCode == null || sessionCode.isBlank()) return;
+
         Operations op  = new Operations();
         op.type        = "CURSOR";
         op.sessionCode = sessionCode;
         op.username    = username;
         op.cursorIndex = index;
+
         send(op.toJson());
     }
-
     // -----------------------------------------------------------------------
     // Block operation senders
     // -----------------------------------------------------------------------

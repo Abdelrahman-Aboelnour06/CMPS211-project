@@ -173,7 +173,8 @@ public class Server extends TextWebSocketHandler {
 
 
                 case "INSERT_BLOCK", "DELETE_BLOCK", "SPLIT_BLOCK", "MERGE_BLOCK",
-                     "MOVE_BLOCK", "COPY_BLOCK" , "MOVE_BLOCK_EXEC"-> {
+                     "MERGE_SPLIT",
+                     "MOVE_BLOCK", "COPY_BLOCK" , "MOVE_BLOCK_EXEC" ->{
                     if (!sessionManager.isEditor(session)) {
                         sendError(session, "Viewers cannot modify blocks"); return;
                     }
@@ -189,49 +190,58 @@ public class Server extends TextWebSocketHandler {
                     }
                     String editorCode = sessionManager.getSessionCode(session);
 
-                    List<Operations> inverses = undoRedoManager.undoGroup(op.username);
-                    if (inverses == null || inverses.isEmpty()) {
-                        inverses = undoRedoManager.undoFromSessionGroup(editorCode, op.username);
-                    }
+                    List<Operations> inverses =
+                            undoRedoManager.undoFromSessionGroup(editorCode, op.username);
+
                     if (inverses == null || inverses.isEmpty()) {
                         sendError(session, "Nothing to undo"); return;
                     }
+
+                    SessionManager.Session s = sessionManager.getSession(editorCode);
+
                     for (Operations inv : inverses) {
                         inv.sessionCode = editorCode;
-                        broadcastToAll(editorCode, inv.toJson());
+                        String invJson = inv.toJson();
+                        if (s != null) s.logOperation(invJson);
+                        broadcastToAll(editorCode, invJson);
                     }
                 }
-
                 case "REDO" -> {
                     if (!sessionManager.isEditor(session)) {
                         sendError(session, "Viewers cannot redo"); return;
                     }
                     String editorCode = sessionManager.getSessionCode(session);
 
-                    List<Operations> reapplied = undoRedoManager.redoGroup(op.username);
+                    List<Operations> reapplied =
+                            undoRedoManager.redoFromSessionGroup(editorCode, op.username);
+
                     if (reapplied == null || reapplied.isEmpty()) {
-                        reapplied = undoRedoManager.redoFromSessionGroup(editorCode, op.username);
-                    }
-                    if (reapplied == null ||reapplied.isEmpty()) {
                         sendError(session, "Nothing to redo"); return;
                     }
+
+                    SessionManager.Session s = sessionManager.getSession(editorCode);
+
                     for (Operations r : reapplied) {
                         r.sessionCode = editorCode;
-                        broadcastToAll(editorCode, r.toJson());
+                        String rJson = r.toJson();
+                        if (s != null) s.logOperation(rJson);
+                        broadcastToAll(editorCode, rJson);
                     }
                 }
-
 
 
 
                 case "CURSOR" -> {
                     String code = sessionManager.getSessionCode(session);
+                    if (code == null) return;
+
                     List<WebSocketSession> others = sessionManager.getOtherClients(session);
                     String payload = message.getPayload();
-                    sessionManager.bufferMissedOp(code, payload);
-                    for (WebSocketSession other : others) sendTo(other, payload);
-                }
 
+                    for (WebSocketSession other : others) {
+                        sendTo(other, payload);
+                    }
+                }
                //kolo yb2a bayen
                 case "GET_ACTIVE_USERS" -> {
                     String code = sessionManager.getSessionCode(session);
